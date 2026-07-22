@@ -37,3 +37,9 @@ vates-demo-poster.png
 /build_4bit.log
 /extract_mtp.log
 /dl_model.py
+.agents/TODO.md
+.agents/brick/.venv/
+.agents/brick/index/
+.agents/brick/conflicts/
+.agents/brick/config.local.json
+.agents/brick/update-state.json

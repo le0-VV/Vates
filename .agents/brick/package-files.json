@@ -1,0 +1,28 @@
+{
+  "files": [
+    ".agents/brick/package-files.json",
+    ".agents/brick/source.json",
+    ".agents/brick/bin/brick",
+    ".agents/brick/AGENT_USAGE.md",
+    ".agents/brick/config.example.json",
+    ".agents/brick/setup.py",
+    ".agents/brick/pyproject.toml",
+    ".agents/brick/examples/llm-ingest/instructions.md",
+    ".agents/brick/examples/llm-ingest/memory-ingest.schema.json",
+    ".agents/brick/examples/memory-add/blocked-unsafe.json",
+    ".agents/brick/examples/memory-add/command.json",
+    ".agents/brick/examples/memory-add/decision.json",
+    ".agents/brick/examples/memory-add/routine.json",
+    ".agents/brick/examples/memory-add/skill.json",
+    ".agents/brick/examples/memory-files/command.md",
+    ".agents/brick/examples/memory-files/decision.md",
+    ".agents/brick/examples/memory-files/routine.md",
+    ".agents/brick/examples/memory-files/skill.md",
+    ".agents/brick/templates/AGENTS.md",
+    ".agents/brick/src/brick/__init__.py",
+    ".agents/brick/src/brick/cli.py",
+    ".agents/brick/src/brick/conflicts.py",
+    ".agents/brick/src/brick/index.py",
+    ".agents/brick/src/brick/memory.py"
+  ]
+}
