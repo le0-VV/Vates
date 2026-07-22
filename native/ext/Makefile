@@ -1,13 +1,14 @@
 # 生产 MLX 扩展构建：cmake 把 native_moe_mlx_ext.cpp 编成
 # mlx_streaming/native_moe_ext$(EXT_SUFFIX).so（nanobind + MLX Primitive）。
 PYTHON ?= ../../.venv/bin/python
+CMAKE ?= $(shell $(PYTHON) -c 'import shutil, sys; from pathlib import Path; print(shutil.which("cmake") or Path(sys.executable).with_name("cmake"))')
 PY_SITE ?= $(shell $(PYTHON) -c 'import sysconfig; print(sysconfig.get_path("purelib"))')
 NANOBIND_DIR := $(shell $(PYTHON) -m nanobind --cmake_dir)
 MLX_CMAKE_DIR := $(PY_SITE)/mlx/share/cmake/MLX
 
 native_moe_ext:
-	cmake -S . -B build -DPython_EXECUTABLE=$(abspath $(PYTHON)) -Dnanobind_DIR=$(NANOBIND_DIR) -DMLX_DIR=$(MLX_CMAKE_DIR) -DCMAKE_LIBRARY_OUTPUT_DIRECTORY=$(abspath ../../mlx_streaming)
-	cmake --build build --target native_moe_ext -j
+	$(CMAKE) -S . -B build -DPython_EXECUTABLE=$(abspath $(PYTHON)) -Dnanobind_DIR=$(NANOBIND_DIR) -DMLX_DIR=$(MLX_CMAKE_DIR) -DCMAKE_LIBRARY_OUTPUT_DIRECTORY=$(abspath ../../mlx_streaming)
+	$(CMAKE) --build build --target native_moe_ext -j
 
 clean:
 	rm -rf build
