@@ -5,11 +5,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 BENCH_DIR = ROOT / "native" / "bench"
-RUNNER = BENCH_DIR / "native_moe_runner"
+RUNNER = BENCH_DIR / "metal" / "native_moe_runner"
 
 
 def test_native_moe_runner_synthetic_smoke():
-    subprocess.run(["make", "native_moe_runner"], cwd=BENCH_DIR, check=True)
+    subprocess.run(["make", "metal/native_moe_runner"], cwd=BENCH_DIR, check=True)
     out = subprocess.check_output([
         str(RUNNER),
         "--synthetic", "1",
