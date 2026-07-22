@@ -1,0 +1,68 @@
+import importlib.util
+import os
+from pathlib import Path
+
+import pytest
+
+
+SCRIPT = Path(__file__).parents[2] / "scripts" / "run_mac_mini_qwen3_next.py"
+
+
+def _load_launcher():
+    spec = importlib.util.spec_from_file_location("run_mac_mini_qwen3_next", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_missing_raid_is_rejected(monkeypatch, tmp_path):
+    launcher = _load_launcher()
+    monkeypatch.setattr(os.path, "ismount", lambda path: False)
+    with pytest.raises(RuntimeError, match="Leonard's RAID is not mounted"):
+        launcher.ensure_raid_mounted(tmp_path)
+
+
+def test_mounted_raid_is_accepted(monkeypatch, tmp_path):
+    launcher = _load_launcher()
+    monkeypatch.setattr(os.path, "ismount", lambda path: Path(path) == tmp_path)
+    launcher.ensure_raid_mounted(tmp_path)
+
+
+def test_command_uses_hot_internal_experts_and_cold_raid_assets():
+    launcher = _load_launcher()
+    command = launcher.build_command(["--plain", "--stats", "-n", "32"])
+    joined = "\n".join(command)
+    assert command[:2] == [
+        "/Users/leonardw/Projects/Vates/.venv/bin/vates",
+        "chat",
+    ]
+    assert "/Volumes/Leonard's RAID/Vates/models/qwen3_next_80b_4bit" in joined
+    assert "/Volumes/Leonard's RAID/Vates/models/qn_mtp_weights.safetensors" in joined
+    assert "/Users/leonardw/Library/Application Support/Vates/" in joined
+    assert command[command.index("--expert-slots") + 1] == "32"
+    assert command[command.index("--spec-slots") + 1] == "8"
+    assert command[command.index("-k") + 1] == "3"
+    assert command[-4:] == ["--plain", "--stats", "-n", "32"]
+
+
+def test_runtime_environment_is_fixed_and_preserves_unrelated_values():
+    launcher = _load_launcher()
+    environment = launcher.runtime_environment({"LANG": "en_GB.UTF-8", "EXPERT_SLOTS": "99"})
+    assert environment["LANG"] == "en_GB.UTF-8"
+    assert environment["EXPERT_SLOTS"] == "32"
+    assert environment["POOL_SPEC_SLOTS"] == "8"
+    assert environment["KV_QUANT"] == "1"
+    assert environment["KV_K_BITS"] == "4"
+    assert environment["KV_V_BITS"] == "3"
+    assert environment["PREFILL_CHUNK"] == "2"
+    assert environment["MTP_ADAPTIVE_DEPTH"] == "1"
+    assert environment["MTP_DEPTH_MAX"] == "3"
+
+
+def test_main_reports_missing_raid_without_exec(monkeypatch, capsys):
+    launcher = _load_launcher()
+    monkeypatch.setattr(os.path, "ismount", lambda path: False)
+    monkeypatch.setattr(os, "execve", lambda *args: pytest.fail("execve must not run"))
+    assert launcher.main([]) == 2
+    assert "Leonard's RAID is not mounted" in capsys.readouterr().err
