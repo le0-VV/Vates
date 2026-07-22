@@ -49,12 +49,15 @@ Run Brick's supported checks from the repository root:
 
 1. `./brick setup --json --pretty`
 2. `./brick memory validate --pretty`
-3. `./brick rebuild` outside the sandbox
-4. `./brick memory search "project context" --pretty` outside the sandbox
+3. Add Brick's packaged example decision as a temporary verification memory.
+4. `./brick rebuild --json --pretty` outside the sandbox.
+5. `./brick memory search "assuming project context" --pretty` outside the sandbox.
+6. Remove the temporary memory and run `./brick rebuild --json --pretty` again outside the sandbox.
+7. Run `./brick memory validate --pretty` and confirm the final memory count is zero.
 
-Setup and validation must succeed. Search output must report hybrid retrieval with semantic search available and the configured model. Git status must show that `.agents/brick/config.local.json`, the Brick virtual environment, generated index, update state, conflicts, and `.agents/TODO.md` are not tracked.
+Setup and validation must succeed. During the temporary-memory round-trip, search output must report hybrid retrieval with semantic search available and the configured model. Git status must show that the temporary memory has been removed and that `.agents/brick/config.local.json`, the Brick virtual environment, generated index, update state, conflicts, and `.agents/TODO.md` are not tracked.
 
-Because canonical memory is intentionally empty, a semantic search may return no results; retrieval-mode metadata, rather than a non-empty result set, proves semantic retrieval is enabled.
+Brick deliberately reports keyword retrieval with `index_has_no_embeddings` when there are no active memories. The final empty index will therefore report keyword mode even though semantic retrieval is configured. The successful temporary-memory hybrid search proves that the final configuration can perform semantic retrieval as soon as canonical memory is added and the index is rebuilt.
 
 ## Error handling
 
@@ -62,4 +65,3 @@ Because canonical memory is intentionally empty, a semantic search may return no
 - If the embedding endpoint cannot be reached outside the sandbox, stop without claiming semantic search is enabled.
 - If the embedding response is malformed or reports a different model, keep the local configuration uncommitted and report the mismatch.
 - If the installer creates `AGENTS.md.brick-backup`, review and merge applicable project-specific instructions before proceeding.
-
