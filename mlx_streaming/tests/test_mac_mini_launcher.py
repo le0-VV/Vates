@@ -46,6 +46,40 @@ def test_command_uses_hot_internal_experts_and_cold_raid_assets():
     assert command[-4:] == ["--plain", "--stats", "-n", "32"]
 
 
+@pytest.mark.parametrize(
+    "extra_args",
+    [
+        pytest.param(["--model", "/tmp/model"], id="model-separated"),
+        pytest.param(["--model=/tmp/model"], id="model-equals"),
+        pytest.param(["--mod", "/tmp/model"], id="model-abbreviation"),
+        pytest.param(["--expert-dir", "/tmp/experts"], id="expert-dir-separated"),
+        pytest.param(["--expert-dir=/tmp/experts"], id="expert-dir-equals"),
+        pytest.param(["--expert-d", "/tmp/experts"], id="expert-dir-abbreviation"),
+        pytest.param(["--mtp-out", "/tmp/mtp"], id="mtp-out-separated"),
+        pytest.param(["--mtp-out=/tmp/mtp"], id="mtp-out-equals"),
+        pytest.param(["--mtp", "/tmp/mtp"], id="mtp-out-abbreviation"),
+        pytest.param(["--qn-config", "/tmp/config"], id="qn-config-separated"),
+        pytest.param(["--qn-config=/tmp/config"], id="qn-config-equals"),
+        pytest.param(["--qn", "/tmp/config"], id="qn-config-abbreviation"),
+        pytest.param(["--expert-slots", "1"], id="expert-slots-separated"),
+        pytest.param(["--expert-slots=1"], id="expert-slots-equals"),
+        pytest.param(["--expert-s", "1"], id="expert-slots-abbreviation"),
+        pytest.param(["--spec-slots", "1"], id="spec-slots-separated"),
+        pytest.param(["--spec-slots=1"], id="spec-slots-equals"),
+        pytest.param(["--spec", "1"], id="spec-slots-abbreviation"),
+        pytest.param(["-k", "4"], id="k-short-separated"),
+        pytest.param(["-k4"], id="k-short-attached"),
+        pytest.param(["-k=4"], id="k-short-attached-equals"),
+        pytest.param(["--k", "4"], id="k-long-separated"),
+        pytest.param(["--k=4"], id="k-long-equals"),
+    ],
+)
+def test_command_rejects_fixed_profile_overrides(extra_args):
+    launcher = _load_launcher()
+    with pytest.raises(ValueError, match="fixed Qwen profile"):
+        launcher.build_command(extra_args)
+
+
 def test_runtime_environment_is_fixed_and_preserves_unrelated_values():
     launcher = _load_launcher()
     environment = launcher.runtime_environment({"LANG": "en_GB.UTF-8", "EXPERT_SLOTS": "99"})
@@ -66,3 +100,11 @@ def test_main_reports_missing_raid_without_exec(monkeypatch, capsys):
     monkeypatch.setattr(os, "execve", lambda *args: pytest.fail("execve must not run"))
     assert launcher.main([]) == 2
     assert "Leonard's RAID is not mounted" in capsys.readouterr().err
+
+
+def test_main_reports_profile_override_without_exec(monkeypatch, capsys):
+    launcher = _load_launcher()
+    monkeypatch.setattr(os.path, "ismount", lambda path: True)
+    monkeypatch.setattr(os, "execve", lambda *args: pytest.fail("execve must not run"))
+    assert launcher.main(["--expert-s=1"]) == 2
+    assert "fixed Qwen profile" in capsys.readouterr().err

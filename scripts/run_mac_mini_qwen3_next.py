@@ -39,13 +39,42 @@ RUNTIME_ENV = {
     "MLX_CACHE_LIMIT_GB": "1",
 }
 
+_FIXED_LONG_OPTIONS = (
+    "--model",
+    "--expert-dir",
+    "--mtp-out",
+    "--qn-config",
+    "--expert-slots",
+    "--spec-slots",
+    "--k",
+)
+
 
 def ensure_raid_mounted(mount: Path = RAID_MOUNT) -> None:
     if not os.path.ismount(mount):
         raise RuntimeError(f"Leonard's RAID is not mounted at {mount}")
 
 
+def _ensure_no_profile_overrides(extra_args: list[str]) -> None:
+    for argument in extra_args:
+        fixed_options: tuple[str, ...] = ()
+        if argument.startswith("-k"):
+            fixed_options = ("-k",)
+        elif argument.startswith("--") and argument != "--":
+            option = argument.partition("=")[0]
+            fixed_options = tuple(
+                fixed for fixed in _FIXED_LONG_OPTIONS if fixed.startswith(option)
+            )
+        if fixed_options:
+            options = ", ".join(fixed_options)
+            raise ValueError(
+                f"argument {argument!r} cannot override the fixed Qwen profile "
+                f"option(s): {options}"
+            )
+
+
 def build_command(extra_args: list[str]) -> list[str]:
+    _ensure_no_profile_overrides(extra_args)
     return [
         str(VATES_BIN),
         "chat",
@@ -78,10 +107,10 @@ def runtime_environment(
 def main(argv: Sequence[str] | None = None) -> int:
     try:
         ensure_raid_mounted()
-    except RuntimeError as exc:
+        command = build_command(list(sys.argv[1:] if argv is None else argv))
+    except (RuntimeError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    command = build_command(list(sys.argv[1:] if argv is None else argv))
     os.execve(command[0], command, runtime_environment())
     return 127
 
