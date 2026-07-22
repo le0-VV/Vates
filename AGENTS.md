@@ -37,3 +37,9 @@
     1. Never rely on assumptions about prior work; search Brick memory with `./brick memory search "query"` or clarify with the user.
     2. Combine project context and clear reasoning to answer with concrete details.
     3. Keep answers direct and actionable.
+
+## Vates Brick embedding service
+
+- Brick's device-local embedding base URL is `http://127.0.0.1:8745/v1`; the configured model is `mlx-community/embeddinggemma-300m-4bit`.
+- The endpoint is host-local and cannot be reached from inside the Codex sandbox. Run embedding-dependent commands such as `./brick rebuild` and `./brick memory search "query" --pretty` with sandbox escalation.
+- Treat an in-sandbox connection failure as an execution-context limitation. Confirm service availability outside the sandbox before diagnosing the embedding server as unavailable.
