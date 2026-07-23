@@ -5,6 +5,6 @@
 - [x] Write, self-review and commit the detailed TDD implementation plan.
 - [x] Execute the implementation plan with isolated subagents and two-stage review.
 - [x] Run focused, hosted-equivalent and full local verification.
-- [ ] Push the reviewed branch and confirm protected-main pull-request checks.
-- [ ] Start the persistent server on the Mac mini and verify it from the LAN.
-- [ ] Report Chatbox connection details, operating status and shutdown procedure.
+- [x] Push the reviewed branch and confirm protected-main pull-request checks.
+- [x] Start the persistent server on the Mac mini and verify it from the LAN.
+- [x] Report Chatbox connection details, operating status and shutdown procedure.
