@@ -9,3 +9,11 @@
 - [ ] Restart the OpenAI server with internal MTP, expert and log paths; verify health and a short real inference request.
 - [ ] Remove temporary harness/monitor state and report elapsed time, throughput, peak resources and any limiting failure.
 - [ ] After explicit deletion authorisation, remove redundant derived RAID preparation artefacts and confirm only original source files remain.
+
+# Investigate Qwen3-Next inference speed after the 131k baseline
+
+- [ ] Preserve the completed 32/16/K=3 stress result and establish reproducible short-context prefill and decode baselines.
+- [ ] Profile Metal utilisation, CPU synchronisation, expert-cache hit/miss behaviour, internal-SSD reads and swap writes to locate the dominant stalls.
+- [ ] Compare memory-residency, expert-slot/read-scheduling and prefill/decode-path options one variable at a time, including peak memory and stability.
+- [ ] Present evidence-backed options and trade-offs for user approval before changing the persistent server profile or implementation.
+- [ ] Restore and verify the reviewed persistent server after experiments, retaining only explicitly approved speed changes.
