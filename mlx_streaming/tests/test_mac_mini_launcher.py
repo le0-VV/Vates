@@ -41,7 +41,7 @@ def test_command_uses_hot_internal_experts_and_cold_raid_assets():
     assert "/Volumes/Leonard's RAID/Vates/models/qn_mtp_weights.safetensors" in joined
     assert "/Users/leonardw/Library/Application Support/Vates/" in joined
     assert command[command.index("--expert-slots") + 1] == "32"
-    assert command[command.index("--spec-slots") + 1] == "8"
+    assert command[command.index("--spec-slots") + 1] == "16"
     assert command[command.index("-k") + 1] == "3"
     assert command[-4:] == ["--plain", "--stats", "-n", "32"]
 
@@ -85,7 +85,7 @@ def test_runtime_environment_is_fixed_and_preserves_unrelated_values():
     environment = launcher.runtime_environment({"LANG": "en_GB.UTF-8", "EXPERT_SLOTS": "99"})
     assert environment["LANG"] == "en_GB.UTF-8"
     assert environment["EXPERT_SLOTS"] == "32"
-    assert environment["POOL_SPEC_SLOTS"] == "8"
+    assert environment["POOL_SPEC_SLOTS"] == "16"
     assert environment["KV_QUANT"] == "1"
     assert environment["KV_K_BITS"] == "4"
     assert environment["KV_V_BITS"] == "3"

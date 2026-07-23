@@ -22,7 +22,7 @@ EXPERT_DIR = Path(
 
 RUNTIME_ENV = {
     "EXPERT_SLOTS": "32",
-    "POOL_SPEC_SLOTS": "8",
+    "POOL_SPEC_SLOTS": "16",
     "STREAM_BLOB_LOADER": "1",
     "ZEROCOPY_DUAL_SOURCE": "1",
     "NATIVE_FUSED_PREFETCH": "1",
@@ -89,7 +89,7 @@ def build_command(extra_args: list[str]) -> list[str]:
         "--expert-slots",
         "32",
         "--spec-slots",
-        "8",
+        "16",
         "-k",
         "3",
         *extra_args,

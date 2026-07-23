@@ -4,7 +4,7 @@
 
 **Goal:** Run the pinned Qwen3-Next-80B-A3B-Instruct 4-bit MLX model through Vates on Leonard's 16 GB M4 Mac mini, with canonical assets on Leonard's RAID and repeatedly streamed expert blobs on the internal SSD.
 
-**Architecture:** Add one tested device-specific launcher that checks only the RAID mount, supplies exact hot/cold paths, and fixes the validated 32/8/K=3 runtime profile. Prepare canonical assets on the RAID with the existing Vates tools, atomically copy the validated packed experts to internal storage, then qualify the target with byte, memory, swap, and real-generation checks.
+**Architecture:** Add one tested device-specific launcher that checks only the RAID mount, supplies exact hot/cold paths, and fixes the measured 32/16/K=3 runtime profile. Prepare canonical assets on the RAID with the existing Vates tools, atomically copy the validated packed experts to internal storage, then qualify the target with byte, memory, swap, and real-generation checks. The initial acceptance used 32/8; a later controlled A/B/A/B benchmark changed only the side-region capacity and established 32/16 as the current launcher profile.
 
 **Tech Stack:** Python 3.13, MLX 0.31.2, mlx-lm 0.31.3, uv, pytest, CMake/nanobind, GitHub Actions, Hugging Face Hub, macOS Apple Silicon, SSH.
 
@@ -16,7 +16,7 @@
 - Only the repeatedly read expert runtime store lives internally, below `/Users/leonardw/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit/experts`.
 - Keep the Vates checkout and virtual environment at `/Users/leonardw/Projects/Vates` on the internal SSD.
 - Preserve at least 30 GB of internal free space after copying the 43,486,543,872-byte expert blob store; require at least 75 GB free before copying.
-- Runtime profile: `EXPERT_SLOTS=32`, `POOL_SPEC_SLOTS=8`, `K=3`, K4/V3 KV quantisation, prefill chunk 2, MTP adaptive depth at 0.3 and maximum depth 3.
+- Runtime profile: `EXPERT_SLOTS=32`, `POOL_SPEC_SLOTS=16`, `K=3`, K4/V3 KV quantisation, prefill chunk 2, MTP adaptive depth at 0.3 and maximum depth 3.
 - Never lower `EXPERT_SLOTS` below 32 or raise K/depth above 3 to force a fit.
 - The launcher checks only that `/Volumes/Leonard's RAID` is mounted; it does not introduce a hard native-extension check.
 - Keep preparation intermediates unless the user separately authorises deletion.
@@ -28,7 +28,7 @@
 - Create `.github/workflows/ci.yml`: hosted portable launcher and source checks required by repository policy; full MLX/native verification runs on the actual M4 target.
 - Create `scripts/run_mac_mini_qwen3_next.py`: mount-aware launcher with exact model, expert, MTP, and runtime settings.
 - Create `mlx_streaming/tests/test_mac_mini_launcher.py`: unit coverage for mount handling, command construction, and environment construction.
-- Create one Brick routine memory through `./brick memory add`: durable hot/cold paths, launch command, and validated profile after deployment succeeds.
+- Maintain one active Brick routine through `./brick memory` tooling: durable hot/cold paths, launch command, and the measured 32/16 profile. Retire stale active guidance through Brick rather than editing generated memory files.
 - Do not change core inference code unless a live, reproducible incompatibility is found and separately diagnosed.
 
 ---
@@ -94,7 +94,7 @@ def test_command_uses_hot_internal_experts_and_cold_raid_assets():
     assert "/Volumes/Leonard's RAID/Vates/models/qn_mtp_weights.safetensors" in joined
     assert "/Users/leonardw/Library/Application Support/Vates/" in joined
     assert command[command.index("--expert-slots") + 1] == "32"
-    assert command[command.index("--spec-slots") + 1] == "8"
+    assert command[command.index("--spec-slots") + 1] == "16"
     assert command[command.index("-k") + 1] == "3"
     assert command[-4:] == ["--plain", "--stats", "-n", "32"]
 
@@ -104,7 +104,7 @@ def test_runtime_environment_is_fixed_and_preserves_unrelated_values():
     environment = launcher.runtime_environment({"LANG": "en_GB.UTF-8", "EXPERT_SLOTS": "99"})
     assert environment["LANG"] == "en_GB.UTF-8"
     assert environment["EXPERT_SLOTS"] == "32"
-    assert environment["POOL_SPEC_SLOTS"] == "8"
+    assert environment["POOL_SPEC_SLOTS"] == "16"
     assert environment["KV_QUANT"] == "1"
     assert environment["KV_K_BITS"] == "4"
     assert environment["KV_V_BITS"] == "3"
@@ -160,7 +160,7 @@ EXPERT_DIR = Path(
 
 RUNTIME_ENV = {
     "EXPERT_SLOTS": "32",
-    "POOL_SPEC_SLOTS": "8",
+    "POOL_SPEC_SLOTS": "16",
     "STREAM_BLOB_LOADER": "1",
     "ZEROCOPY_DUAL_SOURCE": "1",
     "NATIVE_FUSED_PREFETCH": "1",
@@ -198,7 +198,7 @@ def build_command(extra_args: list[str]) -> list[str]:
         "--expert-slots",
         "32",
         "--spec-slots",
-        "8",
+        "16",
         "-k",
         "3",
         *extra_args,
@@ -719,7 +719,9 @@ Expected: `internal expert store valid` is printed and at least 30 GiB remains f
 
 ---
 
-### Task 6: Qualify the 32/8/K=3 profile on the live target
+### Task 6: Historical initial qualification of the 32/8/K=3 profile
+
+This task records the 22 July deployment acceptance exactly as run. Its 32/8 commands and log names are historical byte-truth, real-response and 256-token stability evidence; they do not describe the current fixed launcher profile.
 
 **Files:**
 - Remote create: `/Volumes/Leonard's RAID/Vates/logs/qwen3-next-32-8-smoke.log`
@@ -849,14 +851,25 @@ Expected: system memory pressure is not critical, swap does not grow continuousl
 
 ---
 
-### Task 7: Record the validated operational routine in Brick
+### Post-deployment tuning: adopt the measured 32/16/K=3 profile
+
+On 23 July, four verifier-off end-to-end processes ran in A/B/A/B order with every variable fixed except `POOL_SPEC_SLOTS`. Both 32/16 processes reproduced the improvement over their neighbouring 32/8 controls. Across four speculative repeats per capacity, the median increased from 4.85 to 5.095 tok/s (approximately 5.05%), demand loads fell by approximately 31.5%, and MLX peak allocation rose from 6.00 to 6.68 GB. All eight speculative repeats exactly matched greedy output with `n_mismatch=0`, `fallback_replays=0` and identical dumped token sequences across capacities. System pressure was non-critical and recovered after the four processes.
+
+The launcher and operational routine therefore use `EXPERT_SLOTS=32`, `POOL_SPEC_SLOTS=16` and `K=3`. K4/V3 KV quantisation, prefill chunk 2, adaptive threshold 0.3, maximum depth 3, the mount-only RAID check and immutable protected arguments remain unchanged. The tracked benchmark report is `benchmarks/reports/mac-mini-qwen3-next-32-16-2026-07-23.md`.
+
+The historical 32/32 regression report is not a 10 tok/s serving claim. It recorded 9.6–10.77 speculative decode tok/s for a 48-token run on a 32 GB machine with nearly full swap and explicitly marked absolute throughput untrustworthy. Its host chip, storage, exact command and raw logs were not retained, so it is neither directly comparable with Leonard's 16 GB Mac mini nor evidence that this target should approach 10 tok/s.
+
+---
+
+### Task 7: Record and maintain the validated operational routine in Brick
 
 **Files:**
-- Create through Brick: one generated Markdown routine under `.agents/memory/routine/`; use the exact path returned by Brick for staging and verification.
+- Create through Brick: one superseding Markdown routine under `.agents/memory/routine/`; use the exact path returned by Brick for staging and verification.
+- Update through Brick: retire the earlier 32/8 routine so it cannot remain active launch guidance.
 
 **Interfaces:**
 - Consumes: successful Tasks 3–6 and their exact paths/profile.
-- Produces: a durable repository memory retrievable by later agents.
+- Produces: one active 32/16 repository routine retrievable by later agents, with the 32/8 routine retained only as redacted history.
 
 - [ ] **Step 1: Prepare the exact Brick candidate and add the routine through Brick**
 
@@ -873,15 +886,19 @@ Use `apply_patch` to create `/private/tmp/vates-mac-mini-memory.json` with this 
     "mac-mini",
     "mlx"
   ],
-  "body": "Use /Users/leonardw/Projects/Vates with canonical model and MTP assets under /Volumes/Leonard's RAID/Vates, and the hot expert store under /Users/leonardw/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit/experts. Launch scripts/run_mac_mini_qwen3_next.py with EXPERT_SLOTS=32, POOL_SPEC_SLOTS=8, and K=3. The launcher requires Leonard's RAID to be mounted. The pinned model revision is d8a069bfa8ae87d3d468412e1034acae19b5892b. Do not lower EXPERT_SLOTS below 32 or increase K/depth above 3.",
+  "body": "Use /Users/leonardw/Projects/Vates with canonical model and MTP assets under /Volumes/Leonard's RAID/Vates, and the hot expert store under /Users/leonardw/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit/experts. Launch scripts/run_mac_mini_qwen3_next.py with EXPERT_SLOTS=32, POOL_SPEC_SLOTS=16, and K=3. The launcher requires Leonard's RAID to be mounted. The pinned model revision is d8a069bfa8ae87d3d468412e1034acae19b5892b. Do not lower EXPERT_SLOTS below 32 or increase K/depth above 3.",
   "source": {
     "kind": "deployment",
-    "ref": "Mac mini Qwen3-Next acceptance run on 2026-07-22"
+    "ref": "Mac mini Qwen3-Next 32/16 tuning on 2026-07-23"
   },
   "evidence": [
     {
       "kind": "verification",
-      "text": "The target completed the native build/import, full test suite, byte-truth smoke, real Vates response, and 256-token stability soak."
+      "text": "The initial 32/8 target run completed the native build/import, full test suite, byte-truth smoke, real Vates response, and 256-token stability soak."
+    },
+    {
+      "kind": "benchmark",
+      "text": "A verifier-off A/B/A/B comparison changed only POOL_SPEC_SLOTS and measured a 5.05% median gain at 32/16, with exact greedy/speculative output, zero fallback replays, non-critical pressure, and recovered memory after four processes."
     }
   ],
   "fields": {
@@ -895,7 +912,9 @@ Use `apply_patch` to create `/private/tmp/vates-mac-mini-memory.json` with this 
       "Run .venv/bin/python scripts/run_mac_mini_qwen3_next.py with any desired Vates chat arguments."
     ],
     "verify": "Vates loads the pinned model, prints a non-empty response, and reports positive throughput without critical memory pressure."
-  }
+  },
+  "supersedes": ["01KY6012RRCZG4E5GE9HMN41KT"],
+  "confirm_public": true
 }
 ```
 
@@ -905,9 +924,15 @@ Run from the primary checkout:
 ./brick memory add --pretty < /private/tmp/vates-mac-mini-memory.json
 ```
 
-Expected: Brick reports `status: ok` and prints the generated routine memory path.
+Expected: Brick reports `status: ok` and prints the generated superseding routine path.
 
-- [ ] **Step 2: Validate and rebuild retrieval state**
+- [ ] **Step 2: Retire the stale 32/8 operating guidance through Brick**
+
+Use `./brick memory redact --pretty` with a JSON candidate targeting the old routine path and the exact stale `POOL_SPEC_SLOTS=8` text. Record that the measured 32/16 routine supersedes it. Do not edit either generated memory file directly.
+
+Expected: Brick reports `status: ok`; the older record becomes `redacted` and no active routine contains `POOL_SPEC_SLOTS=8`.
+
+- [ ] **Step 3: Validate and rebuild retrieval state**
 
 Run outside the sandbox because the embedding endpoint is host-local:
 
@@ -917,9 +942,9 @@ Run outside the sandbox because the embedding endpoint is host-local:
 ./brick memory search "Leonard Mac mini hot expert store" --pretty
 ```
 
-Expected: validation succeeds, rebuild reports one additional embedding, and search returns the new routine.
+Expected: validation succeeds, rebuild indexes both records, and the default active-only search returns only the new 32/16 routine.
 
-- [ ] **Step 3: Commit only the memory change**
+- [ ] **Step 4: Commit the coherent memory transition**
 
 Run:
 
@@ -931,7 +956,7 @@ git commit -m "docs(memory): record Mac mini Qwen deployment"
 git log -1 --show-signature
 ```
 
-Expected: the staged-name check lists only the generated routine memory file, and the signed commit uses the dedicated `docs(memory)` type.
+Expected: the staged-name check lists only the Brick-generated superseding routine and the Brick-redacted historical routine. Commit these memory files separately from all non-memory changes with the required `docs(memory): ...` subject.
 
 ---
 
@@ -972,7 +997,7 @@ git diff --name-only origin/main...HEAD
   --jq '{enforce_admins: .enforce_admins.enabled, pull_requests: (.required_pull_request_reviews != null), force_pushes: .allow_force_pushes.enabled, deletions: .allow_deletions.enabled}'
 ```
 
-Expected: every outgoing commit has a good signature; changed files are limited to the approved design/plan, launcher/test, CI workflow, and one Brick routine memory; protection reports enforced administrators, required pull requests, force pushes disabled, and deletions disabled.
+Expected: every outgoing commit has a good signature; changed files are limited to the approved design/plan, benchmark report, launcher/test, authorised native/CMake repairs, CI workflow, the redacted historical routine and one active 32/16 routine; protection reports enforced administrators, required pull requests, force pushes disabled, and deletions disabled.
 
 - [ ] **Step 3: Push the final branch and verify hosted CI**
 

@@ -2,6 +2,8 @@
 
 **Date:** 22 July 2026
 
+**Profile update:** 23 July 2026
+
 **Target:** `leonardw@leonards-mac-mini`
 
 **Model:** `mlx-community/Qwen3-Next-80B-A3B-Instruct-4bit` at revision `d8a069bfa8ae87d3d468412e1034acae19b5892b`
@@ -76,11 +78,11 @@ No preparation intermediates will be deleted. Deletion can be considered separat
 
 ## Runtime configuration
 
-The initial 16 GB profile is:
+The current fixed 16 GB profile is:
 
 ```text
 EXPERT_SLOTS=32
-POOL_SPEC_SLOTS=8
+POOL_SPEC_SLOTS=16
 K=3
 STREAM_BLOB_LOADER=1
 ZEROCOPY_DUAL_SOURCE=1
@@ -98,9 +100,9 @@ MTP_DEPTH_MAX=3
 MLX_CACHE_LIMIT_GB=1
 ```
 
-`EXPERT_SLOTS=32` is the validated real-region capacity floor. A K=3 verification pass can route to as many as 30 distinct experts in a layer, so lowering this value risks incorrect output. `POOL_SPEC_SLOTS=8` is an additional per-layer side region for predicted experts; reducing it from 32 to 8 saves approximately 2.04 GB of expert-pool storage at the cost of a lower cache hit rate. `K=3` permits the MTP drafter to propose up to three tokens before verification. K=4 requires at least 40 real expert slots and was slower in the repository's measurements.
+`EXPERT_SLOTS=32` is the validated real-region capacity floor. A K=3 verification pass can route to as many as 30 distinct experts in a layer, so lowering this value risks incorrect output. `POOL_SPEC_SLOTS=16` adds 16 per-layer side rows for predicted experts. The controlled verifier-off A/B/A/B benchmark on the target measured a 5.05% median throughput gain over 32/8, approximately 31.5% fewer demand loads and a 0.68 GB increase in MLX peak allocation. All eight speculative repeats exactly matched greedy output, with zero mismatches and zero fallback replays. `K=3` permits the MTP drafter to propose up to three tokens before verification. K=4 requires at least 40 real expert slots and was slower in the repository's measurements.
 
-The later MTP benchmark reports measured approximately 8.23–8.27 decimal GB of MLX peak allocation for the documented 32/32 profile. The repository's earlier side-region study measured 5.07 GB peak for a 32/8 non-MTP run. A current-path 32/8 peak near 6.2 GB is a layout-based estimate, not a measurement. Total process RSS and system pressure cannot be inferred from MLX allocation alone, so the live target run is authoritative.
+The initial 22 July acceptance used 32/8 and remains the authoritative byte-truth and 256-token stability qualification: it recorded zero bad expert reads, zero fallback replays, non-critical memory pressure and recovering swap. The 23 July tuning changed only the speculative side-region capacity to 16. Its four-process benchmark measured 6.68 GB MLX peak and safe observed memory recovery on this 16 GB target. The historical 32/32 result measured approximately 8.23–8.27 GB MLX peak on an unidentified 32 GB machine with nearly full swap; its reported 9.6–10.77 decode tok/s is explicitly reference-only and is not a portable serving claim or a prediction for this Mac mini.
 
 The launcher will pass absolute paths for the RAID-backed main model, MTP output, and Qwen configuration, plus the internal expert directory. It will check only that `/Volumes/Leonard's RAID` is mounted before invoking Vates. The deployment process will build and test the native extension because it materially affects performance, but the launcher will not introduce a new hard failure if that extension is unavailable; Vates retains its existing fallback behaviour.
 
@@ -146,15 +148,13 @@ Deployment acceptance requires fresh evidence from the Mac mini:
 2. Validate all 48 layer blobs, per-layer indexes, total blob bytes, and `_split_meta.json` before and after the internal copy.
 3. Build the native extension against the deployed virtual environment and confirm that it imports.
 4. Run the complete Python test suite on the target.
-5. Run a short K=3, 32/8 generation with byte-truth verification enabled. Require zero bad expert reads, no expert-union capacity warning, and no unexpected fallback replay.
+5. Run a short K=3 generation with byte-truth verification enabled. The historical acceptance used 32/8; require zero bad expert reads, no expert-union capacity warning, and no unexpected fallback replay.
 6. Generate a real answer through Vates using the intended absolute paths.
 7. Run a multi-turn and at least 256-token soak while recording MLX active and peak allocation, process RSS, memory pressure, swap before and after, token throughput, and latency outliers.
 8. Reject the deployment profile if byte validation fails, generation fails, swap grows continuously, memory pressure becomes critical, or repeated multi-second latency cliffs occur.
 
-The documented 32/32 profile is not an automatic fallback because its higher memory requirement may be unsafe on 16 GB. If 32/8 fails a correctness gate, investigate the cause before changing capacity. If it is correct but memory pressure is unacceptable, stop and report the measured limit rather than silently lowering `EXPERT_SLOTS` below its validated floor.
+The historical 32/32 profile is not an automatic fallback because its higher memory requirement may be unsafe on 16 GB and its absolute throughput evidence is explicitly untrustworthy. If 32/16 fails a correctness gate, investigate the cause before changing capacity. If it is correct but memory pressure is unacceptable, stop and report the measured limit rather than silently lowering `EXPERT_SLOTS` below its validated floor.
 
 ## Expected outcome and remaining uncertainty
 
-The hot expert blobs will use the internal SSD, avoiding the RAID's approximately 343 MB/s streaming ceiling during generation. The remaining RAID-backed assets are not continuously streamed through the expert pool. This should materially improve throughput over an all-RAID runtime, but no token-per-second claim is made until the real run.
-
-The primary uncertainty is total system working-set behaviour on a 16 GB M4. Repository evidence makes the 32/8 profile plausible, but current-path 32/8 MTP memory, process RSS, swap behaviour, and sustained throughput have not yet been measured on this machine. The acceptance run resolves those unknowns.
+The hot expert blobs use the internal SSD, avoiding the RAID's approximately 343 MB/s streaming ceiling during generation; the remaining RAID-backed assets are not continuously streamed through the expert pool. The initial 32/8 acceptance resolved the byte-integrity and stability uncertainty on this target. The subsequent 32/16 A/B/A/B benchmark established a reproducible 5.05% median gain with exact output and recovered memory pressure, so 32/16 is the current fixed profile. The 32/8 logs remain historical acceptance and control evidence rather than the current launcher configuration.
