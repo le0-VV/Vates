@@ -181,12 +181,27 @@ All 12 full-attention layers scan the quantised KV cache. This makes boundary
 decode inherently dependent on context length. The cache currently grows in
 256-token steps, producing 512 reallocations/copies by 131,072 tokens.
 
-Safe offline screens:
+An order-controlled 8,192-prompt-token A/B/A screen held prediction width 16
+and 32/16 residency fixed:
 
-- increase cache growth step to 8,192 tokens, then 32,768 only if positive;
-- measure 32k, 64k, 96k and 131k decode-latency slope;
-- separate cache-growth copy time from steady attention scan time;
-- confirm final KV size, logits and cache offsets are unchanged.
+| Growth step | Throughput | Growth events | Final capacity | Final KV bytes |
+| --- | ---: | ---: | ---: | ---: |
+| 256 A | 8.530 tok/s | 396 | 8,448 | 51,904,512 |
+| 8,192 | 8.864 tok/s | 24 | 16,384 | 100,663,296 |
+| 256 B | 8.751 tok/s | 396 | 8,448 | 51,904,512 |
+
+Step 8,192 was 2.6% above the step-256 median, but only 1.3% above the faster
+reference. All three final-logit arrays were bit-identical. However, the
+8,193rd boundary token forced every full-attention cache to allocate a second
+8,192-token region, almost doubling final KV bytes, and observed swap peaked at
+2,459 MiB versus 1,593 MiB in the first reference. The result therefore fails
+the equal-final-bytes gate and is too small to justify a boundary-aligned
+follow-up. Step 256 remains the validation setting.
+
+Longer-term work may still measure 32k, 64k, 96k and 131k decode-latency slope,
+separate cache-copy time from attention scan time, or design a bounded
+geometric growth policy that avoids both 512 small reallocations and a
+whole-step over-allocation at boundaries.
 
 This surface is especially relevant to 131k and 262k operation and may be
 underrepresented by short decode benchmarks.
