@@ -11,6 +11,9 @@ import mlx_streaming.mtp.generate as gen_mod
 from mlx_streaming.tests.test_mtp_stream_hook import _kv_toy_k3
 
 
+MODEL_ID = "qwen3-next-80b-a3b-instruct-4bit"
+
+
 class _Tok:
     eos_token_ids = None
     eos_token_id = -1        # 无 EOS 干扰
@@ -139,3 +142,49 @@ def test_chat_repl_reset_drops_cache(monkeypatch):
     assert calls[0]["cached_len"] == 0     # 首轮
     assert calls[1]["cached_len"] == 0     # /reset 后弃用旧 cache,全量重建
     assert model.n == 2
+
+
+def test_parser_preserves_chat_defaults_and_adds_serve():
+    chat = cli_mod._build_parser().parse_args(["chat"])
+    assert chat.func is cli_mod.cmd_chat
+    assert chat.k == 3
+    assert chat.max_tokens == 4096
+
+    serve = cli_mod._build_parser().parse_args(["serve"])
+    assert serve.func is cli_mod.cmd_serve
+    assert serve.host == "127.0.0.1"
+    assert serve.port == 8000
+    assert serve.model_id == MODEL_ID
+
+
+def test_main_dispatches_explicit_serve(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(cli_mod, "cmd_serve", lambda args: seen.update(vars(args)))
+    parser = cli_mod._build_parser()
+    monkeypatch.setattr(cli_mod, "_build_parser", lambda: parser)
+    cli_mod.main(["serve", "--host", "0.0.0.0", "--port", "9000"])
+    assert seen["host"] == "0.0.0.0"
+    assert seen["port"] == 9000
+
+
+def test_cmd_serve_loads_before_opening_socket(monkeypatch):
+    events = []
+
+    class Backend:
+        def __init__(self, args):
+            events.append(("construct", args))
+
+        def load(self, on_status):
+            events.append(("load", None))
+            on_status("ready")
+
+    monkeypatch.setattr("mlx_streaming.tui.backend.MLXBackend", Backend)
+    monkeypatch.setattr(
+        "mlx_streaming.server.serve",
+        lambda **kwargs: events.append(("serve", kwargs)),
+    )
+    args = types.SimpleNamespace(
+        host="0.0.0.0", port=8000, model_id=MODEL_ID, max_tokens=64
+    )
+    cli_mod.cmd_serve(args)
+    assert [event[0] for event in events] == ["construct", "load", "serve"]

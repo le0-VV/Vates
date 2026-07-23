@@ -74,10 +74,14 @@ def _ensure_no_profile_overrides(extra_args: list[str]) -> None:
 
 
 def build_command(extra_args: list[str]) -> list[str]:
+    extra_args = list(extra_args)
+    subcommand = "chat"
+    if extra_args and extra_args[0] in {"chat", "serve"}:
+        subcommand = extra_args.pop(0)
     _ensure_no_profile_overrides(extra_args)
     return [
         str(VATES_BIN),
-        "chat",
+        subcommand,
         "--model",
         str(MODEL_DIR),
         "--expert-dir",

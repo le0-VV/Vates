@@ -46,6 +46,19 @@ def test_command_uses_hot_internal_experts_and_cold_raid_assets():
     assert command[-4:] == ["--plain", "--stats", "-n", "32"]
 
 
+def test_command_accepts_explicit_serve_subcommand():
+    launcher = _load_launcher()
+    command = launcher.build_command(["serve", "--host", "0.0.0.0", "--port", "8000"])
+    assert command[:2] == [
+        "/Users/leonardw/Projects/Vates/.venv/bin/vates",
+        "serve",
+    ]
+    assert command[command.index("--expert-slots") + 1] == "32"
+    assert command[command.index("--spec-slots") + 1] == "16"
+    assert command[command.index("-k") + 1] == "3"
+    assert command[-4:] == ["--host", "0.0.0.0", "--port", "8000"]
+
+
 @pytest.mark.parametrize(
     "extra_args",
     [

@@ -289,6 +289,45 @@ def _add_chat_args(p):
     p.set_defaults(func=cmd_chat)
 
 
+def cmd_serve(args):
+    """Load and warm one backend, then expose it through the OpenAI v1 API."""
+    import logging
+
+    from mlx_streaming.server import serve
+    from mlx_streaming.tui.backend import MLXBackend
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    backend = MLXBackend(args)
+    backend.load(lambda message: print(message, file=sys.stderr, flush=True))
+    print(
+        f"Vates OpenAI server ready on http://{args.host}:{args.port}/v1",
+        file=sys.stderr,
+        flush=True,
+    )
+    serve(
+        backend=backend,
+        host=args.host,
+        port=args.port,
+        model_id=args.model_id,
+        default_max_tokens=args.max_tokens,
+    )
+
+
+def _add_serve_args(parser):
+    _add_chat_args(parser)
+    parser.add_argument("--host", default="127.0.0.1", help="HTTP bind address")
+    parser.add_argument("--port", type=int, default=8000, help="HTTP listen port")
+    parser.add_argument(
+        "--model-id",
+        default="qwen3-next-80b-a3b-instruct-4bit",
+        help="model identifier advertised through the OpenAI API",
+    )
+    parser.set_defaults(func=cmd_serve)
+
+
 def _build_parser():
     parser = argparse.ArgumentParser(
         prog="vates",
@@ -296,12 +335,14 @@ def _build_parser():
     sub = parser.add_subparsers(dest="cmd")
     chat = sub.add_parser("chat", help="进入交互式多轮对话(MTP 自投机快路径)")
     _add_chat_args(chat)
+    serve_parser = sub.add_parser("serve", help="启动 OpenAI v1 兼容 HTTP 服务")
+    _add_serve_args(serve_parser)
     return parser
 
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    subcmds = {"chat"}
+    subcmds = {"chat", "serve"}
     # 让 chat 成为默认子命令:不带子命令(或首参是 flag)时自动补上 chat;
     # 但保留顶层 -h/--help 直接显示总帮助。
     if not argv or (argv[0] not in subcmds and argv[0] not in ("-h", "--help")):
