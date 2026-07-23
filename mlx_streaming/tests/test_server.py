@@ -1,11 +1,13 @@
 import http.client
 import json
+import socket
 import threading
 import time
 import types
 
 import pytest
 
+import mlx_streaming.server as server_mod
 from mlx_streaming.server import (
     ChatRequest,
     RequestError,
@@ -58,8 +60,6 @@ def test_validate_request_accepts_chatbox_metadata():
         ({"messages": []}, "non-empty array"),
         ({"messages": [{"role": "tool", "content": "x"}]}, "role"),
         ({"messages": [{"role": "user", "content": []}]}, "string content"),
-        ({"tools": []}, "tools are not supported"),
-        ({"tool_choice": "auto"}, "tools are not supported"),
         ({"max_tokens": 0}, "between 1 and 4096"),
         ({"max_tokens": 4097}, "between 1 and 4096"),
         ({"max_tokens": True}, "integer"),
@@ -69,6 +69,36 @@ def test_validate_request_accepts_chatbox_metadata():
 def test_validate_request_rejects_invalid_input(change, message):
     with pytest.raises(RequestError, match=message):
         validate_request(_valid_payload(**change), MODEL_ID, 128)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("tools", []),
+        ("tool_choice", "auto"),
+        ("functions", []),
+        ("function_call", "auto"),
+        ("response_format", {"type": "json_object"}),
+        ("parallel_tool_calls", False),
+    ],
+)
+def test_validate_request_rejects_unsupported_top_level_fields(field, value):
+    with pytest.raises(RequestError, match="not supported"):
+        validate_request(_valid_payload(**{field: value}), MODEL_ID, 128)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("tool_calls", []),
+        ("function_call", {"name": "lookup"}),
+        ("tool_call_id", "call-123"),
+    ],
+)
+def test_validate_request_rejects_unsupported_message_fields(field, value):
+    message = {"role": "assistant", "content": "", field: value}
+    with pytest.raises(RequestError, match=rf"messages\[0\]\.{field}.*not supported"):
+        validate_request(_valid_payload(messages=[message]), MODEL_ID, 128)
 
 
 def test_validate_request_rejects_two_token_limit_fields():
@@ -111,6 +141,104 @@ def _request(address, method, path, payload=None):
     return response.status, response.headers, raw
 
 
+def _raw_request(address, request, *, shutdown_write=True, timeout=1.0):
+    with socket.create_connection(address, timeout=timeout) as client:
+        client.settimeout(timeout)
+        client.sendall(request)
+        if shutdown_write:
+            client.shutdown(socket.SHUT_WR)
+        response = bytearray()
+        while True:
+            chunk = client.recv(64 * 1024)
+            if not chunk:
+                return bytes(response)
+            response.extend(chunk)
+
+
+def _parse_raw_response(raw):
+    raw_headers, body = raw.split(b"\r\n\r\n", 1)
+    lines = raw_headers.decode("iso-8859-1").splitlines()
+    status = int(lines[0].split()[1])
+    headers = dict(line.split(": ", 1) for line in lines[1:])
+    return status, headers, body
+
+
+def _assert_openai_body_error(raw, expected_status):
+    status, headers, body = _parse_raw_response(raw)
+    assert status == expected_status
+    assert headers["Connection"] == "close"
+    error = json.loads(body)["error"]
+    assert isinstance(error["message"], str) and error["message"]
+    assert error["type"] == "invalid_request_error"
+    assert error["param"] is None
+    assert error["code"] is None
+
+
+def _raw_post_headers(content_length=None):
+    headers = [
+        b"POST /v1/chat/completions HTTP/1.1",
+        b"Host: localhost",
+        b"Content-Type: application/json",
+        b"Connection: close",
+    ]
+    if content_length is not None:
+        headers.append(f"Content-Length: {content_length}".encode())
+    return b"\r\n".join(headers) + b"\r\n\r\n"
+
+
+def test_request_body_limits_are_explicit_and_bounded():
+    assert 0 < server_mod.MAX_REQUEST_BODY_BYTES <= 1024 * 1024
+    assert 0 < server_mod.REQUEST_BODY_READ_TIMEOUT_SECONDS <= 30
+
+
+@pytest.mark.parametrize(
+    ("content_length", "expected_status"),
+    [
+        (None, 411),
+        ("not-an-integer", 400),
+        ("0", 400),
+        ("-1", 400),
+    ],
+)
+def test_invalid_request_body_lengths_use_openai_errors(
+    content_length,
+    expected_status,
+):
+    with _ServerContext(FakeBackend()) as address:
+        raw = _raw_request(address, _raw_post_headers(content_length))
+    _assert_openai_body_error(raw, expected_status)
+
+
+def test_oversized_request_body_is_rejected_before_reading():
+    with _ServerContext(FakeBackend()) as address:
+        raw = _raw_request(
+            address,
+            _raw_post_headers(server_mod.MAX_REQUEST_BODY_BYTES + 1),
+        )
+    _assert_openai_body_error(raw, 413)
+
+
+def test_truncated_request_body_is_rejected_even_when_received_prefix_is_json():
+    body = json.dumps(_valid_payload()).encode()
+    request = _raw_post_headers(len(body) + 10) + body
+    with _ServerContext(FakeBackend()) as address:
+        raw = _raw_request(address, request)
+    _assert_openai_body_error(raw, 400)
+
+
+def test_stalled_request_body_times_out_without_waiting_for_client_close(monkeypatch):
+    monkeypatch.setattr(server_mod, "REQUEST_BODY_READ_TIMEOUT_SECONDS", 0.05)
+    request = _raw_post_headers(10) + b"{"
+    with _ServerContext(FakeBackend()) as address:
+        raw = _raw_request(
+            address,
+            request,
+            shutdown_write=False,
+            timeout=0.5,
+        )
+    _assert_openai_body_error(raw, 408)
+
+
 def test_health_and_model_discovery():
     with _ServerContext(FakeBackend()) as address:
         status, headers, raw = _request(address, "GET", "/health")
@@ -126,7 +254,7 @@ def test_health_and_model_discovery():
         }
 
 
-def test_non_streaming_completion_and_usage():
+def test_non_streaming_completion_omits_unavailable_usage():
     backend = FakeBackend(reply="Hello back")
     with _ServerContext(backend) as address:
         status, _, raw = _request(
@@ -141,11 +269,7 @@ def test_non_streaming_completion_and_usage():
         "content": "Hello back",
     }
     assert response["choices"][0]["finish_reason"] == "stop"
-    assert response["usage"] == {
-        "prompt_tokens": 0,
-        "completion_tokens": 10,
-        "total_tokens": 10,
-    }
+    assert "usage" not in response
 
 
 def test_streaming_completion_has_role_deltas_stop_and_done():
@@ -180,6 +304,42 @@ def test_invalid_request_uses_openai_error_shape():
         "param": None,
         "code": None,
     }
+
+
+class _FailingBackend:
+    def __init__(self):
+        self.args = types.SimpleNamespace(max_tokens=77)
+        self.seen_limit = None
+
+    def generate(self, _messages, _on_text):
+        self.seen_limit = self.args.max_tokens
+        raise RuntimeError("generation failed")
+
+
+def test_inference_failure_uses_server_error_type():
+    with _ServerContext(_FailingBackend()) as address:
+        status, _, raw = _request(
+            address,
+            "POST",
+            "/v1/chat/completions",
+            _valid_payload(max_tokens=3),
+        )
+    assert status == 500
+    assert json.loads(raw)["error"]["type"] == "server_error"
+
+
+def test_token_limit_is_restored_after_generation_raises():
+    backend = _FailingBackend()
+    with _ServerContext(backend) as address:
+        status, _, _ = _request(
+            address,
+            "POST",
+            "/v1/chat/completions",
+            _valid_payload(max_tokens=3),
+        )
+    assert status == 500
+    assert backend.seen_limit == 3
+    assert backend.args.max_tokens == 77
 
 
 class _ObservedBackend:

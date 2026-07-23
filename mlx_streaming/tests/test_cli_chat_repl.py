@@ -6,12 +6,11 @@
 import builtins
 import types
 
+import pytest
+
 import mlx_streaming.cli as cli_mod
 import mlx_streaming.mtp.generate as gen_mod
 from mlx_streaming.tests.test_mtp_stream_hook import _kv_toy_k3
-
-
-MODEL_ID = "qwen3-next-80b-a3b-instruct-4bit"
 
 
 class _Tok:
@@ -112,6 +111,23 @@ def test_warmup_swallows_errors(monkeypatch):
     cli_mod._warmup(model, None, object(), types.SimpleNamespace(k=3))   # 不抛异常即通过
 
 
+def test_warmup_propagates_errors_in_strict_mode(monkeypatch):
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("kernel compile failed")
+
+    monkeypatch.setattr(gen_mod, "mtp_generate", boom)
+    model = _kv_toy_k3()
+
+    with pytest.raises(RuntimeError, match="kernel compile failed"):
+        cli_mod._warmup(
+            model,
+            None,
+            object(),
+            types.SimpleNamespace(k=3),
+            strict=True,
+        )
+
+
 def test_chat_repl_reset_drops_cache(monkeypatch):
     """/reset 后应弃用旧 cache:即使编码恰是旧 cache 的延伸,也全量重建。"""
     model = _Model()
@@ -142,49 +158,3 @@ def test_chat_repl_reset_drops_cache(monkeypatch):
     assert calls[0]["cached_len"] == 0     # 首轮
     assert calls[1]["cached_len"] == 0     # /reset 后弃用旧 cache,全量重建
     assert model.n == 2
-
-
-def test_parser_preserves_chat_defaults_and_adds_serve():
-    chat = cli_mod._build_parser().parse_args(["chat"])
-    assert chat.func is cli_mod.cmd_chat
-    assert chat.k == 3
-    assert chat.max_tokens == 4096
-
-    serve = cli_mod._build_parser().parse_args(["serve"])
-    assert serve.func is cli_mod.cmd_serve
-    assert serve.host == "127.0.0.1"
-    assert serve.port == 8000
-    assert serve.model_id == MODEL_ID
-
-
-def test_main_dispatches_explicit_serve(monkeypatch):
-    seen = {}
-    monkeypatch.setattr(cli_mod, "cmd_serve", lambda args: seen.update(vars(args)))
-    parser = cli_mod._build_parser()
-    monkeypatch.setattr(cli_mod, "_build_parser", lambda: parser)
-    cli_mod.main(["serve", "--host", "0.0.0.0", "--port", "9000"])
-    assert seen["host"] == "0.0.0.0"
-    assert seen["port"] == 9000
-
-
-def test_cmd_serve_loads_before_opening_socket(monkeypatch):
-    events = []
-
-    class Backend:
-        def __init__(self, args):
-            events.append(("construct", args))
-
-        def load(self, on_status):
-            events.append(("load", None))
-            on_status("ready")
-
-    monkeypatch.setattr("mlx_streaming.tui.backend.MLXBackend", Backend)
-    monkeypatch.setattr(
-        "mlx_streaming.server.serve",
-        lambda **kwargs: events.append(("serve", kwargs)),
-    )
-    args = types.SimpleNamespace(
-        host="0.0.0.0", port=8000, model_id=MODEL_ID, max_tokens=64
-    )
-    cli_mod.cmd_serve(args)
-    assert [event[0] for event in events] == ["construct", "load", "serve"]

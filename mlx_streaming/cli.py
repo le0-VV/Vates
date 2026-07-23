@@ -97,14 +97,14 @@ def _build_engine(args, on_status=None):
     return model, tok, drafter
 
 
-def _warmup(model, tok, drafter, args):
+def _warmup(model, tok, drafter, args, *, strict=False):
     """跑一次生成做预热:首轮的明显卡顿主要来自现编译 Metal kernel + 填 MoE 专家 resident 池,
     提前把这部分一次性开销移到加载阶段。
 
     覆盖增强:用一段**较长、token id 跨大跨度词表分散**的合成 prompt——MoE 路由依赖 token 内容,
     分散的 id 会命中更多专家、更充分地预填专家池;较长 prompt 又能走通多块分块 prefill。
     合成 id 直接走 ids_mode(不依赖 tokenizer),分块 prefill(chunk=2)保证长 prompt 也不抬高显存峰值。
-    预热失败不致命(直接吞掉异常),不影响后续真实生成。
+    Chat/TUI 默认保持 best-effort；服务启动传 strict=True，使预热失败阻止端口开放。
     """
     import mlx.core as mx
 
@@ -117,8 +117,9 @@ def _warmup(model, tok, drafter, args):
         ids = [(1 + i * step) % vocab for i in range(n)]
         mtp_generate(model, drafter, tok, mx.array([ids]), 8,
                      K=args.k, ids_mode=True)
-    except Exception:  # noqa: BLE001  预热仅为压首轮延迟,失败不应中断启动
-        pass
+    except Exception:  # noqa: BLE001  Chat/TUI 预热仅为压首轮延迟
+        if strict:
+            raise
 
 
 def _encode_chat(tok, messages):
@@ -301,7 +302,10 @@ def cmd_serve(args):
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     backend = MLXBackend(args)
-    backend.load(lambda message: print(message, file=sys.stderr, flush=True))
+    backend.load(
+        lambda message: print(message, file=sys.stderr, flush=True),
+        strict_warmup=True,
+    )
     print(
         f"Vates OpenAI server ready on http://{args.host}:{args.port}/v1",
         file=sys.stderr,

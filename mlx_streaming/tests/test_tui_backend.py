@@ -111,14 +111,15 @@ def test_mlx_backend_load_warms_up(monkeypatch):
     warmed = []
     monkeypatch.setattr(
         cli_mod, "_warmup",
-        lambda model, tok, drafter, args: warmed.append((model, tok, drafter)))
+        lambda model, tok, drafter, args, *, strict=False:
+            warmed.append((model, tok, drafter, strict)))
 
     b = MLXBackend(types.SimpleNamespace(model="m", k=3, max_tokens=8, system=None))
     seen = []
     b.load(seen.append)
 
     assert (b._model, b._tok, b._drafter) == ("M", "T", "D")
-    assert warmed == [("M", "T", "D")]           # 预热用加载好的引擎跑了一次
+    assert warmed == [("M", "T", "D", False)]    # TUI 默认保持 best-effort 预热
     assert any("预热" in s for s in seen)          # 有预热状态提示
 
 

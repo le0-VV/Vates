@@ -24,5 +24,11 @@ jobs:
         run: python -m pip install pytest==8.4.1
       - name: Compile Python sources
         run: python -m compileall -q mlx_streaming scripts
-      - name: Test the device launcher
-        run: python -m pytest mlx_streaming/tests/test_mac_mini_launcher.py -v
+      - name: Test the portable server and device launcher
+        run: >-
+          python -m pytest
+          mlx_streaming/tests/test_server.py
+          mlx_streaming/tests/test_cli_server_portable.py
+          mlx_streaming/tests/test_ci_portable.py
+          mlx_streaming/tests/test_mac_mini_launcher.py
+          -v

@@ -15,13 +15,29 @@ from mlx_streaming.tui.backend import ChatBackend, GenResult
 
 
 LOG = logging.getLogger(__name__)
+MAX_REQUEST_BODY_BYTES = 1024 * 1024
+REQUEST_BODY_READ_TIMEOUT_SECONDS = 10.0
 _ROLES = {"system", "user", "assistant"}
-_UNSUPPORTED_TOOL_FIELDS = {"tools", "tool_choice"}
+_UNSUPPORTED_REQUEST_FIELDS = (
+    "tools",
+    "tool_choice",
+    "functions",
+    "function_call",
+    "response_format",
+    "parallel_tool_calls",
+)
+_UNSUPPORTED_MESSAGE_FIELDS = ("tool_calls", "function_call", "tool_call_id")
 _INFERENCE_LOCK = threading.Lock()
 
 
 class RequestError(ValueError):
     """A client error that maps to OpenAI's invalid_request_error shape."""
+
+
+class _RequestBodyError(Exception):
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
 
 
 @dataclass(frozen=True)
@@ -38,8 +54,9 @@ def validate_request(
         raise RequestError("request body must be a JSON object")
     if payload.get("model") != model_id:
         raise RequestError(f"unknown model {payload.get('model')!r}")
-    if any(field in payload for field in _UNSUPPORTED_TOOL_FIELDS):
-        raise RequestError("tools are not supported")
+    for field in _UNSUPPORTED_REQUEST_FIELDS:
+        if field in payload:
+            raise RequestError(f"{field} is not supported")
     messages = payload.get("messages")
     if not isinstance(messages, list) or not messages:
         raise RequestError("messages must be a non-empty array")
@@ -47,6 +64,9 @@ def validate_request(
     for index, message in enumerate(messages):
         if not isinstance(message, dict):
             raise RequestError(f"messages[{index}] must be an object")
+        for field in _UNSUPPORTED_MESSAGE_FIELDS:
+            if field in message:
+                raise RequestError(f"messages[{index}].{field} is not supported")
         role = message.get("role")
         if role not in _ROLES:
             raise RequestError(f"messages[{index}].role is not supported")
@@ -74,11 +94,11 @@ def cumulative_delta(previous: str, current: str) -> str:
     return current[len(previous) :] if current.startswith(previous) else current
 
 
-def _error(message: str) -> dict:
+def _error(message: str, error_type: str = "invalid_request_error") -> dict:
     return {
         "error": {
             "message": message,
-            "type": "invalid_request_error",
+            "type": error_type,
             "param": None,
             "code": None,
         }
@@ -150,11 +170,13 @@ class VatesRequestHandler(BaseHTTPRequestHandler):
             self._json(404, _error(f"unknown resource {self.path!r}"))
             return
         try:
-            length = int(self.headers.get("Content-Length", "0"))
-            payload = json.loads(self.rfile.read(length))
+            payload = json.loads(self._read_request_body())
             request = validate_request(
                 payload, self.app.model_id, self.app.default_max_tokens
             )
+        except _RequestBodyError as exc:
+            self._json(exc.status, _error(str(exc)))
+            return
         except (ValueError, json.JSONDecodeError, RequestError) as exc:
             self._json(400, _error(str(exc) or "malformed JSON"))
             return
@@ -162,6 +184,43 @@ class VatesRequestHandler(BaseHTTPRequestHandler):
             self._stream(request)
         else:
             self._complete(request)
+
+    def _read_request_body(self) -> bytes:
+        content_length = self.headers.get("Content-Length")
+        if content_length is None:
+            raise _RequestBodyError(411, "Content-Length header is required")
+        try:
+            length = int(content_length)
+        except ValueError as exc:
+            raise _RequestBodyError(
+                400,
+                "Content-Length must be an integer",
+            ) from exc
+        if length <= 0:
+            raise _RequestBodyError(
+                400,
+                "Content-Length must be greater than zero",
+            )
+        if length > MAX_REQUEST_BODY_BYTES:
+            raise _RequestBodyError(
+                413,
+                f"request body exceeds {MAX_REQUEST_BODY_BYTES} bytes",
+            )
+
+        previous_timeout = self.connection.gettimeout()
+        try:
+            self.connection.settimeout(REQUEST_BODY_READ_TIMEOUT_SECONDS)
+            try:
+                body = self.rfile.read(length)
+            except TimeoutError as exc:
+                raise _RequestBodyError(408, "request body read timed out") from exc
+            except OSError as exc:
+                raise _RequestBodyError(400, "request body was truncated") from exc
+        finally:
+            self.connection.settimeout(previous_timeout)
+        if len(body) != length:
+            raise _RequestBodyError(400, "request body was truncated")
+        return body
 
     def _run(self, request: ChatRequest, on_text: Callable[[str, int], bool]) -> GenResult:
         with _INFERENCE_LOCK:
@@ -180,7 +239,7 @@ class VatesRequestHandler(BaseHTTPRequestHandler):
             result = self._run(request, lambda _text, _tokens: False)
         except Exception:
             LOG.exception("inference failed")
-            self._json(500, _error("inference failed"))
+            self._json(500, _error("inference failed", "server_error"))
             return
         completion_id = f"chatcmpl-{uuid.uuid4().hex}"
         self._json(
@@ -197,11 +256,6 @@ class VatesRequestHandler(BaseHTTPRequestHandler):
                         "finish_reason": "stop",
                     }
                 ],
-                "usage": {
-                    "prompt_tokens": 0,
-                    "completion_tokens": result.n_tokens,
-                    "total_tokens": result.n_tokens,
-                },
             },
         )
 
@@ -247,7 +301,7 @@ class VatesRequestHandler(BaseHTTPRequestHandler):
                 self._write_sse("[DONE]")
         except Exception:
             LOG.exception("streaming inference failed")
-            self._write_sse(_error("inference failed"))
+            self._write_sse(_error("inference failed", "server_error"))
         finally:
             self.close_connection = True
 
