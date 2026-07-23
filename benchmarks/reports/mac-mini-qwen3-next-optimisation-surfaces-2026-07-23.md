@@ -256,11 +256,40 @@ The reviewed 32/16/K=3 server was restored after the matrix; health, model
 enumeration and a real `VATES_OK` completion passed. No persistent performance
 setting was changed.
 
-The next controlled screen repeats the baseline and width-16 result in fresh
-processes, then combines width 16 independently with real-40 and
-speculative-24. A width-16 plus real-40 plus speculative-24 case will run only
-if both individual combinations remain correct, stable and positive. Workers
-12 is excluded from this combination round.
+## Completed prediction-width and residency combinations
+
+The order-controlled fresh-process screen reproduced both reference profiles
+and then combined prediction width 16 with each residency candidate:
+
+| Case | Throughput | Gain vs width-16 median | Demand loads | Peak MLX |
+| --- | ---: | ---: | ---: | ---: |
+| Baseline A | 6.352 tok/s | — | 233,905 | 5.545 GB |
+| Width 16 A | 8.654 tok/s | -0.1% | 216,372 | 5.545 GB |
+| Width 16 + real 40 | 9.123 tok/s | +5.3% | 185,528 | 6.225 GB |
+| Width 16 + speculative 24 | 9.119 tok/s | +5.2% | 195,500 | 6.225 GB |
+| Width 16 B | 8.679 tok/s | +0.1% | 216,819 | 5.545 GB |
+| Baseline B | 6.323 tok/s | — | 233,362 | 5.545 GB |
+| Width 16 + real 40 + speculative 24 | 9.542 tok/s | +10.1% | 168,519 | 6.904 GB |
+
+The repeated width-16 median was 8.667 tok/s, 36.8% above the repeated
+baseline median of 6.337 tok/s. The joint candidate was 50.6% above the
+repeated baseline and reduced demand loads by 27.9%. Every case produced the
+same final-logit SHA-256, next token and boundary-decoded token. The preserved
+`.npy` files also share SHA-256
+`e2f88986314f3b3051cd270d25ce4685ef7be90829e384cf4cc6adb99a818d48`.
+
+The joint candidate retained 38% minimum sampled free memory. Swap fell from
+1,601 to 1,593 MiB during the process, and the internal SSD averaged
+approximately 1,256 MB/s between the first and last samples. Its boundary
+decode took 0.2884 seconds. The screen's automatic gate required identical
+logits, a gain from both individual combinations and at least 20% free memory
+before permitting the joint case.
+
+After the screen, the reviewed 32/16/K=3 server restored successfully and
+independent health, model enumeration and real `VATES_OK` inference checks
+passed. Temporary harness, bytecode and PID state were removed while all result
+logs were preserved. The 40/24/width-16 profile remains a short-context lead,
+not an approved persistent or long-context configuration.
 
 ## Acceptance sequence
 
