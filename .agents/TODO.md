@@ -12,9 +12,12 @@
 
 # Investigate Qwen3-Next inference speed after the 131k baseline
 
-- [ ] Preserve the completed 32/16/K=3 stress result and establish reproducible short-context prefill and decode baselines for rapid iteration only.
-- [ ] Profile Metal utilisation, CPU synchronisation, expert-cache hit/miss behaviour, internal-SSD reads and swap writes to locate the dominant stalls.
+- [x] Preserve the completed 32/16/K=3 stress result and establish reproducible short-context prefill and decode baselines for rapid iteration only.
+- [x] Profile Metal utilisation, CPU synchronisation, expert-cache hit/miss behaviour, internal-SSD reads and swap writes to locate the dominant stalls.
 - [ ] Compare memory-residency, expert-slot/read-scheduling and prefill/decode-path options one variable at a time, including peak memory, correctness and stability.
+  - [x] Complete the fresh 4,096-token one-variable matrix for workers, real slots, speculative slots and prediction width.
+  - [ ] Repeat the fresh baseline and width-16 lead, then screen width 16 with each positive residency candidate.
+  - [ ] Measure KV-cache growth separately at a context long enough to expose allocation-copy cost.
 - [ ] Validate surviving speed improvements at exactly 131,072 tokens; attempt 262,144 tokens as a separate stretch target after confirming model/runtime support.
 - [ ] Rank candidates by reproducible long-context prefill/decode improvement with no artificial throughput floor; correctness, bounded pressure and stability remain hard gates.
 - [ ] Present evidence-backed options and trade-offs for user approval before changing the persistent server profile or implementation.
