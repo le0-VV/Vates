@@ -16,5 +16,6 @@
 - [ ] Profile Metal utilisation, CPU synchronisation, expert-cache hit/miss behaviour, internal-SSD reads and swap writes to locate the dominant stalls.
 - [ ] Compare memory-residency, expert-slot/read-scheduling and prefill/decode-path options one variable at a time, including peak memory, correctness and stability.
 - [ ] Validate surviving speed improvements at exactly 131,072 tokens; attempt 262,144 tokens as a separate stretch target after confirming model/runtime support.
+- [ ] Rank candidates by reproducible long-context prefill/decode improvement with no artificial throughput floor; correctness, bounded pressure and stability remain hard gates.
 - [ ] Present evidence-backed options and trade-offs for user approval before changing the persistent server profile or implementation.
 - [ ] Restore and verify the reviewed persistent server after experiments, retaining only explicitly approved speed changes.
