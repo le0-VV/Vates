@@ -222,6 +222,35 @@ def test_inference_is_serial_and_token_limit_is_restored():
     assert backend.args.max_tokens == 77
 
 
+def test_inference_is_serial_across_server_instances():
+    backend = _ObservedBackend()
+    with (
+        _ServerContext(backend) as first_address,
+        _ServerContext(backend) as second_address,
+    ):
+        start = threading.Barrier(3)
+
+        def send(address, limit):
+            start.wait()
+            _request(
+                address,
+                "POST",
+                "/v1/chat/completions",
+                _valid_payload(max_tokens=limit),
+            )
+
+        threads = [
+            threading.Thread(target=send, args=(first_address, 3)),
+            threading.Thread(target=send, args=(second_address, 5)),
+        ]
+        for thread in threads:
+            thread.start()
+        start.wait()
+        for thread in threads:
+            thread.join()
+    assert backend.peak_active == 1
+
+
 class _DisconnectBackend:
     def __init__(self):
         self.cancelled = threading.Event()

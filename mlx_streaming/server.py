@@ -17,6 +17,7 @@ from mlx_streaming.tui.backend import ChatBackend, GenResult
 LOG = logging.getLogger(__name__)
 _ROLES = {"system", "user", "assistant"}
 _UNSUPPORTED_TOOL_FIELDS = {"tools", "tool_choice"}
+_INFERENCE_LOCK = threading.Lock()
 
 
 class RequestError(ValueError):
@@ -102,7 +103,6 @@ class VatesHTTPServer(ThreadingHTTPServer):
         self.backend = backend
         self.model_id = model_id
         self.default_max_tokens = default_max_tokens
-        self.inference_lock = threading.Lock()
 
 
 class VatesRequestHandler(BaseHTTPRequestHandler):
@@ -164,7 +164,7 @@ class VatesRequestHandler(BaseHTTPRequestHandler):
             self._complete(request)
 
     def _run(self, request: ChatRequest, on_text: Callable[[str, int], bool]) -> GenResult:
-        with self.app.inference_lock:
+        with _INFERENCE_LOCK:
             args = getattr(self.app.backend, "args", None)
             old_limit = getattr(args, "max_tokens", None)
             if args is not None:
