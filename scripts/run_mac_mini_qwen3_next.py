@@ -14,11 +14,12 @@ RAID_VATES = RAID_MOUNT / "Vates"
 PROJECT_ROOT = Path("/Users/leonardw/Projects/Vates")
 VATES_BIN = PROJECT_ROOT / ".venv/bin/vates"
 MODEL_DIR = RAID_VATES / "models/qwen3_next_80b_4bit"
-MTP_PATH = RAID_VATES / "models/qn_mtp_weights.safetensors"
-EXPERT_DIR = Path(
+INTERNAL_RUNTIME_DIR = Path(
     "/Users/leonardw/Library/Application Support/Vates/"
-    "qwen3-next-80b-a3b-instruct-4bit/experts"
+    "qwen3-next-80b-a3b-instruct-4bit"
 )
+MTP_PATH = INTERNAL_RUNTIME_DIR / "mtp/qn_mtp_weights.safetensors"
+EXPERT_DIR = INTERNAL_RUNTIME_DIR / "experts"
 
 RUNTIME_ENV = {
     "EXPERT_SLOTS": "32",
@@ -53,6 +54,16 @@ _FIXED_LONG_OPTIONS = (
 def ensure_raid_mounted(mount: Path = RAID_MOUNT) -> None:
     if not os.path.ismount(mount):
         raise RuntimeError(f"Leonard's RAID is not mounted at {mount}")
+
+
+def ensure_internal_runtime_assets(
+    mtp_path: Path = MTP_PATH,
+    expert_dir: Path = EXPERT_DIR,
+) -> None:
+    if not mtp_path.is_file():
+        raise RuntimeError(f"Internal MTP weights are missing at {mtp_path}")
+    if not expert_dir.is_dir():
+        raise RuntimeError(f"Internal expert store is missing at {expert_dir}")
 
 
 def _ensure_no_profile_overrides(extra_args: list[str]) -> None:
@@ -112,6 +123,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         ensure_raid_mounted()
         command = build_command(list(sys.argv[1:] if argv is None else argv))
+        ensure_internal_runtime_assets()
     except (RuntimeError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 2

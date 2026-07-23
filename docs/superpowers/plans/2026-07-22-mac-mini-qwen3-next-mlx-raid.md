@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Run the pinned Qwen3-Next-80B-A3B-Instruct 4-bit MLX model through Vates on Leonard's 16 GB M4 Mac mini, with canonical assets on Leonard's RAID and repeatedly streamed expert blobs on the internal SSD.
+**Goal:** Run the pinned Qwen3-Next-80B-A3B-Instruct 4-bit MLX model through Vates on Leonard's 16 GB M4 Mac mini, with only canonical original model source files remaining on Leonard's RAID and all derived runtime assets on the internal SSD.
 
-**Architecture:** Add one tested device-specific launcher that checks only the RAID mount, supplies exact hot/cold paths, and fixes the measured 32/16/K=3 runtime profile. Prepare canonical assets on the RAID with the existing Vates tools, atomically copy the validated packed experts to internal storage, then qualify the target with byte, memory, swap, and real-generation checks. The initial acceptance used 32/8; a later controlled A/B/A/B benchmark changed only the side-region capacity and established 32/16 as the current launcher profile.
+**Architecture:** Add one tested device-specific launcher that checks only the RAID mount for RAID availability, supplies exact model/runtime paths, fails fast when internal MTP or expert assets are absent, and fixes the measured 32/16/K=3 runtime profile. Use RAID capacity temporarily for preparation, atomically publish the validated prepared MTP and packed experts to internal storage, qualify the target, then remove derived RAID caches, intermediates, archives and logs. The initial acceptance used 32/8; a later controlled A/B/A/B benchmark changed only the side-region capacity and established 32/16 as the current launcher profile.
 
 **Tech Stack:** Python 3.13, MLX 0.31.2, mlx-lm 0.31.3, uv, pytest, CMake/nanobind, GitHub Actions, Hugging Face Hub, macOS Apple Silicon, SSH.
 
@@ -12,14 +12,14 @@
 
 - Target host: `leonardw@leonards-mac-mini`, Apple M4, 16 GB unified memory, macOS 26.5.2 arm64.
 - Pin `mlx-community/Qwen3-Next-80B-A3B-Instruct-4bit` to revision `d8a069bfa8ae87d3d468412e1034acae19b5892b`.
-- Canonical assets and every preparation artefact live below `/Volumes/Leonard's RAID/Vates`.
-- Only the repeatedly read expert runtime store lives internally, below `/Users/leonardw/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit/experts`.
+- In the verified steady state, only canonical original model source files live below `/Volumes/Leonard's RAID/Vates`.
+- The prepared MTP file, expert runtime store and logs live below `/Users/leonardw/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit/`.
 - Keep the Vates checkout and virtual environment at `/Users/leonardw/Projects/Vates` on the internal SSD.
 - Preserve at least 30 GB of internal free space after copying the 43,486,543,872-byte expert blob store; require at least 75 GB free before copying.
 - Runtime profile: `EXPERT_SLOTS=32`, `POOL_SPEC_SLOTS=16`, `K=3`, K4/V3 KV quantisation, prefill chunk 2, MTP adaptive depth at 0.3 and maximum depth 3.
 - Never lower `EXPERT_SLOTS` below 32 or raise K/depth above 3 to force a fit.
 - The launcher checks only that `/Volumes/Leonard's RAID` is mounted; it does not introduce a hard native-extension check.
-- Keep preparation intermediates unless the user separately authorises deletion.
+- RAID-backed download caches, preparation intermediates, packed archives and logs are temporary and must be removed after verified internal publication.
 - Retry failed internet operations through `http://127.0.0.1:1087` only after the direct attempt fails.
 - Do not push directly to `main`; use the protected `agent/qwen3-next-mlx-raid` branch and a pull request.
 
@@ -41,6 +41,7 @@
 
 **Interfaces:**
 - Produces: `ensure_raid_mounted(mount: Path = RAID_MOUNT) -> None`.
+- Produces: `ensure_internal_runtime_assets(mtp_path: Path = MTP_PATH, expert_dir: Path = EXPERT_DIR) -> None`.
 - Produces: `build_command(extra_args: list[str]) -> list[str]`.
 - Produces: `runtime_environment(base: Mapping[str, str] | None = None) -> dict[str, str]`.
 - Produces: `main(argv: Sequence[str] | None = None) -> int`.
@@ -82,7 +83,23 @@ def test_mounted_raid_is_accepted(monkeypatch, tmp_path):
     launcher.ensure_raid_mounted(tmp_path)
 
 
-def test_command_uses_hot_internal_experts_and_cold_raid_assets():
+def test_missing_internal_mtp_is_rejected(tmp_path):
+    launcher = _load_launcher()
+    experts = tmp_path / "experts"
+    experts.mkdir()
+    with pytest.raises(RuntimeError, match="Internal MTP weights are missing"):
+        launcher.ensure_internal_runtime_assets(tmp_path / "mtp.safetensors", experts)
+
+
+def test_missing_internal_expert_store_is_rejected(tmp_path):
+    launcher = _load_launcher()
+    mtp_path = tmp_path / "mtp.safetensors"
+    mtp_path.touch()
+    with pytest.raises(RuntimeError, match="Internal expert store is missing"):
+        launcher.ensure_internal_runtime_assets(mtp_path, tmp_path / "experts")
+
+
+def test_command_uses_raid_only_for_original_model_assets():
     launcher = _load_launcher()
     command = launcher.build_command(["--plain", "--stats", "-n", "32"])
     joined = "\n".join(command)
@@ -91,8 +108,15 @@ def test_command_uses_hot_internal_experts_and_cold_raid_assets():
         "chat",
     ]
     assert "/Volumes/Leonard's RAID/Vates/models/qwen3_next_80b_4bit" in joined
-    assert "/Volumes/Leonard's RAID/Vates/models/qn_mtp_weights.safetensors" in joined
-    assert "/Users/leonardw/Library/Application Support/Vates/" in joined
+    assert command[command.index("--mtp-out") + 1] == (
+        "/Users/leonardw/Library/Application Support/Vates/"
+        "qwen3-next-80b-a3b-instruct-4bit/mtp/qn_mtp_weights.safetensors"
+    )
+    assert command[command.index("--expert-dir") + 1] == (
+        "/Users/leonardw/Library/Application Support/Vates/"
+        "qwen3-next-80b-a3b-instruct-4bit/experts"
+    )
+    assert "/Volumes/Leonard's RAID/Vates/models/qn_mtp_weights.safetensors" not in joined
     assert command[command.index("--expert-slots") + 1] == "32"
     assert command[command.index("--spec-slots") + 1] == "16"
     assert command[command.index("-k") + 1] == "3"
@@ -119,6 +143,19 @@ def test_main_reports_missing_raid_without_exec(monkeypatch, capsys):
     monkeypatch.setattr(os, "execve", lambda *args: pytest.fail("execve must not run"))
     assert launcher.main([]) == 2
     assert "Leonard's RAID is not mounted" in capsys.readouterr().err
+
+
+def test_main_reports_missing_internal_assets_without_exec(monkeypatch, capsys):
+    launcher = _load_launcher()
+    monkeypatch.setattr(os.path, "ismount", lambda path: True)
+
+    def reject_missing_assets():
+        raise RuntimeError("Internal MTP weights are missing")
+
+    monkeypatch.setattr(launcher, "ensure_internal_runtime_assets", reject_missing_assets)
+    monkeypatch.setattr(os, "execve", lambda *args: pytest.fail("execve must not run"))
+    assert launcher.main([]) == 2
+    assert "Internal MTP weights are missing" in capsys.readouterr().err
 ```
 
 - [ ] **Step 2: Run the focused test and confirm the expected red state**
@@ -152,11 +189,12 @@ RAID_VATES = RAID_MOUNT / "Vates"
 PROJECT_ROOT = Path("/Users/leonardw/Projects/Vates")
 VATES_BIN = PROJECT_ROOT / ".venv/bin/vates"
 MODEL_DIR = RAID_VATES / "models/qwen3_next_80b_4bit"
-MTP_PATH = RAID_VATES / "models/qn_mtp_weights.safetensors"
-EXPERT_DIR = Path(
+INTERNAL_RUNTIME_DIR = Path(
     "/Users/leonardw/Library/Application Support/Vates/"
-    "qwen3-next-80b-a3b-instruct-4bit/experts"
+    "qwen3-next-80b-a3b-instruct-4bit"
 )
+MTP_PATH = INTERNAL_RUNTIME_DIR / "mtp/qn_mtp_weights.safetensors"
+EXPERT_DIR = INTERNAL_RUNTIME_DIR / "experts"
 
 RUNTIME_ENV = {
     "EXPERT_SLOTS": "32",
@@ -181,6 +219,16 @@ RUNTIME_ENV = {
 def ensure_raid_mounted(mount: Path = RAID_MOUNT) -> None:
     if not os.path.ismount(mount):
         raise RuntimeError(f"Leonard's RAID is not mounted at {mount}")
+
+
+def ensure_internal_runtime_assets(
+    mtp_path: Path = MTP_PATH,
+    expert_dir: Path = EXPERT_DIR,
+) -> None:
+    if not mtp_path.is_file():
+        raise RuntimeError(f"Internal MTP weights are missing at {mtp_path}")
+    if not expert_dir.is_dir():
+        raise RuntimeError(f"Internal expert store is missing at {expert_dir}")
 
 
 def build_command(extra_args: list[str]) -> list[str]:
@@ -216,10 +264,11 @@ def runtime_environment(
 def main(argv: Sequence[str] | None = None) -> int:
     try:
         ensure_raid_mounted()
-    except RuntimeError as exc:
+        command = build_command(list(sys.argv[1:] if argv is None else argv))
+        ensure_internal_runtime_assets()
+    except (RuntimeError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    command = build_command(list(sys.argv[1:] if argv is None else argv))
     os.execve(command[0], command, runtime_environment())
     return 127
 
@@ -466,21 +515,21 @@ Expected: pytest exits zero with no failed tests.
 
 ---
 
-### Task 4: Download and prepare canonical assets on Leonard's RAID
+### Task 4: Download the canonical model and prepare temporary RAID artefacts
 
 **Files:**
-- Remote create: `/Volumes/Leonard's RAID/Vates/cache/huggingface/`
+- Remote temporary create: `/Volumes/Leonard's RAID/Vates/cache/huggingface/`
 - Remote create: `/Volumes/Leonard's RAID/Vates/models/qwen3_next_80b_4bit/`
-- Remote create: `/Volumes/Leonard's RAID/Vates/models/qn_mtp_weights.safetensors`
-- Remote create: `/Volumes/Leonard's RAID/Vates/preparation/qwen3_next_expert_files_4bit_g64/`
-- Remote create: `/Volumes/Leonard's RAID/Vates/preparation/mtp-source/`
-- Remote create: `/Volumes/Leonard's RAID/Vates/expert-archive/qwen3_next_experts_4bit_g64/`
+- Remote create: `/Users/leonardw/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit/mtp/qn_mtp_weights.safetensors`
+- Remote temporary create: `/Volumes/Leonard's RAID/Vates/preparation/qwen3_next_expert_files_4bit_g64/`
+- Remote temporary create: `/Volumes/Leonard's RAID/Vates/preparation/mtp-source/`
+- Remote temporary create: `/Volumes/Leonard's RAID/Vates/expert-archive/qwen3_next_experts_4bit_g64/`
 
 **Interfaces:**
 - Consumes: pinned Hugging Face model, original Qwen MTP shard, and existing Vates preparation modules.
-- Produces: canonical main model, prepared MTP, 24,576 split expert files, and 48 packed layer blobs on the RAID.
+- Produces: the canonical main model on RAID, the prepared MTP file internally, and temporary split/packed expert artefacts for internal publication.
 
-- [ ] **Step 1: Create the exact RAID tree and reconfirm capacity**
+- [ ] **Step 1: Create temporary preparation paths and reconfirm capacity**
 
 Run:
 
@@ -496,12 +545,12 @@ ssh -o BatchMode=yes leonardw@leonards-mac-mini '
     "$VATES_RAID_ROOT/cache/huggingface" \
     "$VATES_RAID_ROOT/models" \
     "$VATES_RAID_ROOT/preparation/mtp-source" \
-    "$VATES_RAID_ROOT/expert-archive/qwen3_next_experts_4bit_g64/blobs" \
-    "$VATES_RAID_ROOT/logs"
+    "$VATES_RAID_ROOT/expert-archive/qwen3_next_experts_4bit_g64/blobs"
+  mkdir -p "/Users/leonardw/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit/mtp"
 '
 ```
 
-Expected: the RAID has at least 140 GiB free and all directories are created on that mount.
+Expected: the RAID has at least 140 GiB free, temporary preparation paths are created on that mount, and the internal MTP directory exists.
 
 - [ ] **Step 2: Download the pinned 4-bit MLX model directly to the RAID**
 
@@ -572,7 +621,7 @@ ssh -o BatchMode=yes leonardw@leonards-mac-mini '
 
 Expected: `_split_meta.json` reports 48 MoE layers, 512 experts, hidden size 2,048, MoE intermediate size 512, four bits, and group size 64; 24,576 expert files are created.
 
-- [ ] **Step 5: Pack the canonical expert blobs on the RAID**
+- [ ] **Step 5: Pack the temporary expert archive on the RAID**
 
 Run:
 
@@ -595,7 +644,7 @@ ssh -o BatchMode=yes leonardw@leonards-mac-mini '
 
 Expected: all 48 layer blobs are packed and `blob_index.json` reports stride 1,769,472, 512 experts, 48 layers, four bits, and group size 64.
 
-- [ ] **Step 6: Extract the prepared MTP file on the RAID**
+- [ ] **Step 6: Extract the prepared MTP file to internal storage**
 
 Run:
 
@@ -607,16 +656,16 @@ ssh -o BatchMode=yes leonardw@leonards-mac-mini '
   cd /Users/leonardw/Projects/Vates
   export QN_CONFIG="$RAID_MOUNT/Vates/models/qwen3_next_80b_4bit/config.json"
   export MTP_SHARD_DIR="$RAID_MOUNT/Vates/preparation/mtp-source"
-  export MTP_OUT="$RAID_MOUNT/Vates/models/qn_mtp_weights.safetensors"
+  export MTP_OUT="/Users/leonardw/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit/mtp/qn_mtp_weights.safetensors"
   .venv/bin/python -m mlx_streaming.prep.extract_mtp
 '
 ```
 
 If ModelScope fails directly, rerun after exporting the configured proxy values.
 
-Expected: the source shard is exactly 3,301,131,296 bytes and the prepared MTP file is written to the RAID model directory.
+Expected: the source shard is exactly 3,301,131,296 bytes and the prepared MTP file is written to the internal `mtp/` directory.
 
-- [ ] **Step 7: Validate the canonical expert archive**
+- [ ] **Step 7: Validate the temporary expert archive**
 
 Run:
 
@@ -638,12 +687,12 @@ assert index[\"stride\"] == 1_769_472
 assert index[\"num_experts\"] == 512
 assert index[\"bits\"] == 4 and index[\"group_size\"] == 64
 assert (root / \"_split_meta.json\").is_file()
-print(\"canonical expert archive valid\")
+print(\"temporary expert archive valid\")
 " "$RAID_MOUNT/Vates/expert-archive/qwen3_next_experts_4bit_g64"
 '
 ```
 
-Expected: `canonical expert archive valid` is printed.
+Expected: `temporary expert archive valid` is printed.
 
 ---
 
@@ -653,7 +702,7 @@ Expected: `canonical expert archive valid` is printed.
 - Remote create: `/Users/leonardw/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit/experts/`
 
 **Interfaces:**
-- Consumes: the validated canonical expert archive from Task 4.
+- Consumes: the validated temporary expert archive from Task 4.
 - Produces: the internal `EXPERT_DIR` consumed by the launcher.
 
 - [ ] **Step 1: Enforce internal capacity before copying**
@@ -724,9 +773,9 @@ Expected: `internal expert store valid` is printed and at least 30 GiB remains f
 This task records the 22 July deployment acceptance exactly as run. Its 32/8 commands and log names are historical byte-truth, real-response and 256-token stability evidence; they do not describe the current fixed launcher profile.
 
 **Files:**
-- Remote create: `/Volumes/Leonard's RAID/Vates/logs/qwen3-next-32-8-smoke.log`
-- Remote create: `/Volumes/Leonard's RAID/Vates/logs/qwen3-next-32-8-soak.log`
-- Remote create: `/Volumes/Leonard's RAID/Vates/logs/qwen3-next-32-8-memory-samples.log`
+- Remote create: `/Users/leonardw/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit/logs/qwen3-next-32-8-smoke.log`
+- Remote create: `/Users/leonardw/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit/logs/qwen3-next-32-8-soak.log`
+- Remote create: `/Users/leonardw/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit/logs/qwen3-next-32-8-memory-samples.log`
 
 **Interfaces:**
 - Consumes: the launcher, canonical RAID paths, internal expert store, and native extension.
@@ -761,15 +810,17 @@ ssh -o BatchMode=yes leonardw@leonards-mac-mini '
   cd /Users/leonardw/Projects/Vates
   export MODEL="$RAID_MOUNT/Vates/models/qwen3_next_80b_4bit"
   export QN_CONFIG="$MODEL/config.json"
-  export MTP_OUT="$RAID_MOUNT/Vates/models/qn_mtp_weights.safetensors"
+  export INTERNAL_ROOT="/Users/leonardw/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit"
+  export MTP_OUT="$INTERNAL_ROOT/mtp/qn_mtp_weights.safetensors"
   export EXPERT_DIR="/Users/leonardw/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit/experts"
   export EXPERT_SLOTS=32 POOL_SPEC_SLOTS=8 K=3
   export STREAM_BLOB_LOADER=1 ZEROCOPY_DUAL_SOURCE=1 NATIVE_FUSED_PREFETCH=1 SIDEREGION_LFU=1
   export KV_QUANT=1 KV_K_BITS=4 KV_V_BITS=3 KV_GROUP_SIZE=64 KV_ROTATE=1 PREFILL_CHUNK=2
   export MTP_ADAPTIVE_DEPTH=1 MTP_CONF_TAU=0.3 MTP_DEPTH_MAX=3 MLX_CACHE_LIMIT_GB=1
   export STG_VERIFY=1 UNION_PROF=1 MAXTOK=16 WARMUP_TOK=0 REPEAT=1
+  mkdir -p "$INTERNAL_ROOT/logs"
   .venv/bin/python -m mlx_streaming.runtime.run_mtp_spec 2>&1 | \
-    tee "$RAID_MOUNT/Vates/logs/qwen3-next-32-8-smoke.log"
+    tee "$INTERNAL_ROOT/logs/qwen3-next-32-8-smoke.log"
 '
 ```
 
@@ -801,7 +852,8 @@ ssh -o BatchMode=yes leonardw@leonards-mac-mini '
   cd /Users/leonardw/Projects/Vates
   export MODEL="$RAID_MOUNT/Vates/models/qwen3_next_80b_4bit"
   export QN_CONFIG="$MODEL/config.json"
-  export MTP_OUT="$RAID_MOUNT/Vates/models/qn_mtp_weights.safetensors"
+  export INTERNAL_ROOT="/Users/leonardw/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit"
+  export MTP_OUT="$INTERNAL_ROOT/mtp/qn_mtp_weights.safetensors"
   export EXPERT_DIR="/Users/leonardw/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit/experts"
   export EXPERT_SLOTS=32 POOL_SPEC_SLOTS=8 K=3
   export STREAM_BLOB_LOADER=1 ZEROCOPY_DUAL_SOURCE=1 NATIVE_FUSED_PREFETCH=1 SIDEREGION_LFU=1
@@ -809,8 +861,9 @@ ssh -o BatchMode=yes leonardw@leonards-mac-mini '
   export MTP_ADAPTIVE_DEPTH=1 MTP_CONF_TAU=0.3 MTP_DEPTH_MAX=3 MLX_CACHE_LIMIT_GB=1
   export STG_VERIFY=1 UNION_PROF=1 MAXTOK=256 WARMUP_TOK=32 REPEAT=1
   set -o pipefail
-  SOAK_LOG="$RAID_MOUNT/Vates/logs/qwen3-next-32-8-soak.log"
-  MEMORY_LOG="$RAID_MOUNT/Vates/logs/qwen3-next-32-8-memory-samples.log"
+  mkdir -p "$INTERNAL_ROOT/logs"
+  SOAK_LOG="$INTERNAL_ROOT/logs/qwen3-next-32-8-soak.log"
+  MEMORY_LOG="$INTERNAL_ROOT/logs/qwen3-next-32-8-memory-samples.log"
   (.venv/bin/python -m mlx_streaming.runtime.run_mtp_spec 2>&1 | tee "$SOAK_LOG") &
   SOAK_PID=$!
   (
@@ -842,12 +895,19 @@ ssh -o BatchMode=yes leonardw@leonards-mac-mini '
   RAID_MOUNT=$1
   memory_pressure | sed -n "1,40p"
   sysctl vm.swapusage
-  tail -n 120 "$RAID_MOUNT/Vates/logs/qwen3-next-32-8-memory-samples.log"
-  tail -n 120 "$RAID_MOUNT/Vates/logs/qwen3-next-32-8-soak.log"
+  INTERNAL_ROOT="/Users/leonardw/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit"
+  tail -n 120 "$INTERNAL_ROOT/logs/qwen3-next-32-8-memory-samples.log"
+  tail -n 120 "$INTERNAL_ROOT/logs/qwen3-next-32-8-soak.log"
 '
 ```
 
 Expected: system memory pressure is not critical, swap does not grow continuously across the run, and the log contains no allocation error, byte-verification failure, or capacity warning. If any criterion fails, stop and diagnose; do not silently lower `EXPERT_SLOTS`.
+
+- [ ] **Step 6: Remove temporary derived artefacts from the RAID after runtime qualification**
+
+After the internal expert store and prepared MTP file have passed integrity checks and Task 6 has qualified the runtime, remove the RAID-backed Hugging Face cache, split-expert directory, packed expert archive and preparation logs. The original model directory remains. An original MTP source shard may remain only when explicitly classified as a canonical source file.
+
+Expected: the steady-state RAID tree contains canonical original model source files, not derived runtime assets, caches, split experts, packed archives or logs.
 
 ---
 
@@ -869,7 +929,7 @@ The historical 32/32 regression report is not a 10 tok/s serving claim. It recor
 
 **Interfaces:**
 - Consumes: successful Tasks 3–6 and their exact paths/profile.
-- Produces: one active 32/16 repository routine retrievable by later agents, with the 32/8 routine retained only as redacted history.
+- Produces: one active 32/16 repository routine retrievable by later agents, with stale storage guidance retained only as superseded or redacted history.
 
 - [ ] **Step 1: Prepare the exact Brick candidate and add the routine through Brick**
 
@@ -886,7 +946,7 @@ Use `apply_patch` to create `/private/tmp/vates-mac-mini-memory.json` with this 
     "mac-mini",
     "mlx"
   ],
-  "body": "Use /Users/leonardw/Projects/Vates with canonical model and MTP assets under /Volumes/Leonard's RAID/Vates, and the hot expert store under /Users/leonardw/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit/experts. Launch scripts/run_mac_mini_qwen3_next.py with EXPERT_SLOTS=32, POOL_SPEC_SLOTS=16, and K=3. The launcher requires Leonard's RAID to be mounted. The pinned model revision is d8a069bfa8ae87d3d468412e1034acae19b5892b. Do not lower EXPERT_SLOTS below 32 or increase K/depth above 3.",
+  "body": "Use /Users/leonardw/Projects/Vates with only the canonical original model source files under /Volumes/Leonard's RAID/Vates/models/qwen3_next_80b_4bit. The prepared MTP file is /Users/leonardw/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit/mtp/qn_mtp_weights.safetensors, the expert store is in the sibling experts directory, and the server log is /Users/leonardw/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit/logs/qwen3-next-openai-server.log. Launch scripts/run_mac_mini_qwen3_next.py with EXPERT_SLOTS=32, POOL_SPEC_SLOTS=16, and K=3. The launcher requires Leonard's RAID to be mounted. The pinned model revision is d8a069bfa8ae87d3d468412e1034acae19b5892b. Do not lower EXPERT_SLOTS below 32 or increase K/depth above 3.",
   "source": {
     "kind": "deployment",
     "ref": "Mac mini Qwen3-Next 32/16 tuning on 2026-07-23"
@@ -904,7 +964,9 @@ Use `apply_patch` to create `/private/tmp/vates-mac-mini-memory.json` with this 
   "fields": {
     "prerequisites": [
       "Leonard's RAID is mounted at /Volumes/Leonard's RAID.",
-      "The internal expert store contains all 48 validated layer blobs."
+      "The internal prepared MTP file exists below the runtime root.",
+      "The internal expert store contains all 48 validated layer blobs.",
+      "Server logs are written below the internal runtime root."
     ],
     "steps": [
       "Connect to leonardw@leonards-mac-mini.",
@@ -913,7 +975,7 @@ Use `apply_patch` to create `/private/tmp/vates-mac-mini-memory.json` with this 
     ],
     "verify": "Vates loads the pinned model, prints a non-empty response, and reports positive throughput without critical memory pressure."
   },
-  "supersedes": ["01KY6012RRCZG4E5GE9HMN41KT"],
+  "supersedes": ["01KY6543A2VFB06PD9GAJDYZKB"],
   "confirm_public": true
 }
 ```
@@ -926,11 +988,11 @@ Run from the primary checkout:
 
 Expected: Brick reports `status: ok` and prints the generated superseding routine path.
 
-- [ ] **Step 2: Retire the stale 32/8 operating guidance through Brick**
+- [ ] **Step 2: Confirm the stale active storage guidance is superseded through Brick**
 
-Use `./brick memory redact --pretty` with a JSON candidate targeting the old routine path and the exact stale `POOL_SPEC_SLOTS=8` text. Record that the measured 32/16 routine supersedes it. Do not edit either generated memory file directly.
+Confirm that adding the candidate with `supersedes: ["01KY6543A2VFB06PD9GAJDYZKB"]` marks that active routine as superseded. The older redacted 32/8 routine remains historical. Do not edit any generated memory file directly.
 
-Expected: Brick reports `status: ok`; the older record becomes `redacted` and no active routine contains `POOL_SPEC_SLOTS=8`.
+Expected: Brick reports `status: ok`; routine `01KY6543A2VFB06PD9GAJDYZKB` becomes superseded, and only the new routine remains active.
 
 - [ ] **Step 3: Validate and rebuild retrieval state**
 
@@ -956,7 +1018,7 @@ git commit -m "docs(memory): record Mac mini Qwen deployment"
 git log -1 --show-signature
 ```
 
-Expected: the staged-name check lists only the Brick-generated superseding routine and the Brick-redacted historical routine. Commit these memory files separately from all non-memory changes with the required `docs(memory): ...` subject.
+Expected: the staged-name check lists only the Brick-generated superseding routine and the Brick-updated routine it supersedes. Commit these memory files separately from all non-memory changes with the required `docs(memory): ...` subject.
 
 ---
 
@@ -1037,7 +1099,7 @@ Run:
   --base main \
   --head agent/qwen3-next-mlx-raid \
   --title "feat(deploy): run Qwen3-Next on 16 GB Mac mini" \
-  --body "Adds a tested Mac mini launcher and hosted CI, documents the approved hot/cold storage design, and records the validated operational routine. Canonical model/preparation assets live on Leonard's RAID; the repeatedly streamed expert blobs live on the internal SSD. Verification includes the full suite, native extension build/import, byte-truth smoke, a real Vates response, and a 256-token memory/swap soak."
+  --body "Adds a tested Mac mini launcher and hosted CI, documents the approved storage design, and records the validated operational routine. Only canonical original model source files remain on Leonard's RAID; prepared MTP weights, expert blobs and logs live on the internal SSD. Verification includes the full suite, native extension build/import, byte-truth smoke, a real Vates response, and a 256-token memory/swap soak."
 ```
 
 Expected: GitHub returns a pull-request URL; `main` remains protected and unmodified pending review.

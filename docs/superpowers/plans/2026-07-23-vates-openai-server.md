@@ -23,9 +23,9 @@
 - Cancel generation at the next token callback after a streaming client disconnects.
 - Return `Connection: close`; do not add a web-framework dependency.
 - Keep `EXPERT_SLOTS=32`, `POOL_SPEC_SLOTS=16`, `K=3`, K4/V3 KV quantisation, prefill chunk 2, MTP adaptive threshold 0.3 and maximum depth 3.
-- Keep canonical model and MTP assets on `/Volumes/Leonard's RAID/Vates`; keep the repeatedly read expert store on the internal SSD.
+- Keep only canonical original model source files on `/Volumes/Leonard's RAID/Vates`; keep the prepared MTP file and expert store below `/Users/leonardw/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit/`.
 - The launcher checks only that `/Volumes/Leonard's RAID` is mounted; do not add a hard native-extension check.
-- Write the persistent log to `/Volumes/Leonard's RAID/Vates/logs/qwen3-next-openai-server.log` and the PID below `/Users/leonardw/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit/`.
+- Write the persistent log to `/Users/leonardw/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit/logs/qwen3-next-openai-server.log` and the PID below the same internal root.
 - Do not push directly to `main`; update the existing protected-main pull request from `agent/qwen3-next-mlx-raid-clean`.
 
 ## File map
@@ -847,7 +847,7 @@ Expected: all tests pass, compilation exits zero and the commit signature is goo
 **Interfaces:**
 - Consumes: `scripts/run_mac_mini_qwen3_next.py serve --host 0.0.0.0 --port 8000`.
 - Produces: PID file `~/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit/openai-server.pid`.
-- Produces: log `/Volumes/Leonard's RAID/Vates/logs/qwen3-next-openai-server.log`.
+- Produces: log `~/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit/logs/qwen3-next-openai-server.log`.
 - Produces: a Chatbox base URL made from the LAN address discovered with `ipconfig`, model `qwen3-next-80b-a3b-instruct-4bit`, with no API key.
 
 - [ ] **Step 1: Independently review the implementation against the design**
@@ -899,17 +899,28 @@ Expected: PR 1 remains open from `agent/qwen3-next-mlx-raid-clean` to protected 
 Run:
 
 ```bash
-ssh leonardw@leonards-mac-mini 'test -d "/Volumes/Leonard'"'"'s RAID" && mount | grep -F "/Volumes/Leonard'"'"'s RAID" && test -d "/Volumes/Leonard'"'"'s RAID/Vates/models/qwen3_next_80b_4bit" && test -f "/Volumes/Leonard'"'"'s RAID/Vates/models/qn_mtp_weights.safetensors" && test -d "$HOME/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit/experts" && ! lsof -nP -iTCP:8000 -sTCP:LISTEN'
+ssh leonardw@leonards-mac-mini 'test -d "/Volumes/Leonard'"'"'s RAID" && mount | grep -F "/Volumes/Leonard'"'"'s RAID" && test -d "/Volumes/Leonard'"'"'s RAID/Vates/models/qwen3_next_80b_4bit" && test -f "$HOME/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit/mtp/qn_mtp_weights.safetensors" && test -d "$HOME/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit/experts" && ! lsof -nP -iTCP:8000 -sTCP:LISTEN'
 ```
 
-Expected: the RAID, model, MTP and internal expert store checks succeed and TCP port 8000 has no listener.
+Expected: the RAID and original model checks succeed, the internal MTP and expert store checks succeed, and TCP port 8000 has no listener.
 
-- [ ] **Step 5: Start the service with a stable PID and RAID-backed log**
+- [ ] **Step 5: Start the service with a stable PID and internal log**
 
 Run:
 
 ```bash
-ssh leonardw@leonards-mac-mini 'mkdir -p "/Volumes/Leonard'"'"'s RAID/Vates/logs" "$HOME/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit" && cd /Users/leonardw/Projects/Vates && nohup .venv/bin/python scripts/run_mac_mini_qwen3_next.py serve --host 0.0.0.0 --port 8000 > "/Volumes/Leonard'"'"'s RAID/Vates/logs/qwen3-next-openai-server.log" 2>&1 < /dev/null & server_pid=$! && printf "%s\n" "$server_pid" > "$HOME/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit/openai-server.pid" && printf "%s\n" "$server_pid"'
+ssh leonardw@leonards-mac-mini '
+  set -e
+  internal_root="$HOME/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit"
+  mkdir -p "$internal_root/logs"
+  cd /Users/leonardw/Projects/Vates
+  nohup .venv/bin/python scripts/run_mac_mini_qwen3_next.py \
+    serve --host 0.0.0.0 --port 8000 \
+    > "$internal_root/logs/qwen3-next-openai-server.log" 2>&1 < /dev/null &
+  server_pid=$!
+  printf "%s\n" "$server_pid" > "$internal_root/openai-server.pid"
+  printf "%s\n" "$server_pid"
+'
 ```
 
 Expected: the command prints one PID and returns while the process continues loading and warming the model.
@@ -946,7 +957,7 @@ Expected: model discovery lists the advertised identifier, the non-streaming res
 Run:
 
 ```bash
-ssh leonardw@leonards-mac-mini 'pid=$(cat "$HOME/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit/openai-server.pid") && ps -p "$pid" -o pid=,etime=,command= && lsof -nP -a -p "$pid" -iTCP:8000 -sTCP:LISTEN && ! grep -E "Traceback|allocation error|capacity warning" "/Volumes/Leonard'"'"'s RAID/Vates/logs/qwen3-next-openai-server.log" && memory_pressure | sed -n "1,20p"'
+ssh leonardw@leonards-mac-mini 'internal_root="$HOME/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit" && pid=$(cat "$internal_root/openai-server.pid") && ps -p "$pid" -o pid=,etime=,command= && lsof -nP -a -p "$pid" -iTCP:8000 -sTCP:LISTEN && ! grep -E "Traceback|allocation error|capacity warning" "$internal_root/logs/qwen3-next-openai-server.log" && memory_pressure | sed -n "1,20p"'
 ```
 
 Expected: the recorded process is alive and listening on `*:8000`, the log has no fatal markers, and memory pressure is non-critical.
@@ -960,7 +971,7 @@ Chatbox provider: OpenAI-compatible
 Base URL: http://${VATES_LAN_IP}:8000/v1
 Model: qwen3-next-80b-a3b-instruct-4bit
 API key: none (use any placeholder only if Chatbox requires a non-empty field)
-Log: /Volumes/Leonard's RAID/Vates/logs/qwen3-next-openai-server.log
+Log: ~/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit/logs/qwen3-next-openai-server.log
 PID: ~/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit/openai-server.pid
 Stop: kill "$(cat "$HOME/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit/openai-server.pid")"
 ```

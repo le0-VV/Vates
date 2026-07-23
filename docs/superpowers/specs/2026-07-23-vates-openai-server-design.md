@@ -80,7 +80,7 @@ Malformed JSON, invalid messages, unsupported features and unknown models return
 
 Unexpected inference failures return HTTP 500, log the traceback on the server, and do not fabricate a partial successful response. If an exception occurs after SSE headers are sent, the server emits an error event when the connection remains writable, then terminates the stream.
 
-Startup remains fail-fast for required data and allocation failures. The model is loaded and warmed before the port opens; missing RAID assets, invalid expert stores or allocation failures cause the process to exit rather than advertise a ready endpoint. The launcher adds no hard native-extension check and retains Vates' existing fallback behaviour. The Mac mini launch procedure checks only that Leonard's RAID is mounted; deployment automation separately confirms that port 8000 is free before starting.
+Startup remains fail-fast for required data and allocation failures. The model is loaded and warmed before the port opens; an unavailable RAID model, missing internal MTP weights, an invalid internal expert store or an allocation failure causes the process to exit rather than advertise a ready endpoint. The launcher adds no hard native-extension check and retains Vates' existing fallback behaviour. The Mac mini launch procedure checks only that Leonard's RAID is mounted for RAID availability; deployment automation separately confirms that port 8000 is free before starting.
 
 ## Deployment
 
@@ -99,7 +99,7 @@ MTP_CONF_TAU=0.3
 MTP_DEPTH_MAX=3
 ```
 
-The generic command is `vates serve --host 0.0.0.0 --port 8000` plus the validated absolute model, expert, MTP and configuration paths. It is launched with `nohup` so it survives SSH disconnects. Standard output and error go to `/Volumes/Leonard's RAID/Vates/logs/qwen3-next-openai-server.log`; the process ID is recorded below `/Users/leonardw/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit/` for precise shutdown.
+The generic command is `vates serve --host 0.0.0.0 --port 8000` plus the validated absolute model, expert, MTP and configuration paths. The original model and configuration remain below `/Volumes/Leonard's RAID/Vates/models/qwen3_next_80b_4bit`; the prepared MTP file is `/Users/leonardw/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit/mtp/qn_mtp_weights.safetensors`, and the expert store is in the sibling `experts/` directory. It is launched with `nohup` so it survives SSH disconnects. Standard output and error go to `/Users/leonardw/Library/Application Support/Vates/qwen3-next-80b-a3b-instruct-4bit/logs/qwen3-next-openai-server.log`; the process ID is recorded below the same internal root for precise shutdown.
 
 The LAN IP is discovered from the live target at launch time rather than hard-coded. Chatbox uses `http://<mac-mini-lan-ip>:8000/v1` as its OpenAI base URL. No API key is required; if Chatbox requires a non-empty key field, an arbitrary placeholder is accepted because the server ignores `Authorization`.
 

@@ -29,7 +29,23 @@ def test_mounted_raid_is_accepted(monkeypatch, tmp_path):
     launcher.ensure_raid_mounted(tmp_path)
 
 
-def test_command_uses_hot_internal_experts_and_cold_raid_assets():
+def test_missing_internal_mtp_is_rejected(tmp_path):
+    launcher = _load_launcher()
+    experts = tmp_path / "experts"
+    experts.mkdir()
+    with pytest.raises(RuntimeError, match="Internal MTP weights are missing"):
+        launcher.ensure_internal_runtime_assets(tmp_path / "mtp.safetensors", experts)
+
+
+def test_missing_internal_expert_store_is_rejected(tmp_path):
+    launcher = _load_launcher()
+    mtp_path = tmp_path / "mtp.safetensors"
+    mtp_path.touch()
+    with pytest.raises(RuntimeError, match="Internal expert store is missing"):
+        launcher.ensure_internal_runtime_assets(mtp_path, tmp_path / "experts")
+
+
+def test_command_uses_raid_only_for_original_model_assets():
     launcher = _load_launcher()
     command = launcher.build_command(["--plain", "--stats", "-n", "32"])
     joined = "\n".join(command)
@@ -38,8 +54,15 @@ def test_command_uses_hot_internal_experts_and_cold_raid_assets():
         "chat",
     ]
     assert "/Volumes/Leonard's RAID/Vates/models/qwen3_next_80b_4bit" in joined
-    assert "/Volumes/Leonard's RAID/Vates/models/qn_mtp_weights.safetensors" in joined
-    assert "/Users/leonardw/Library/Application Support/Vates/" in joined
+    assert command[command.index("--mtp-out") + 1] == (
+        "/Users/leonardw/Library/Application Support/Vates/"
+        "qwen3-next-80b-a3b-instruct-4bit/mtp/qn_mtp_weights.safetensors"
+    )
+    assert command[command.index("--expert-dir") + 1] == (
+        "/Users/leonardw/Library/Application Support/Vates/"
+        "qwen3-next-80b-a3b-instruct-4bit/experts"
+    )
+    assert "/Volumes/Leonard's RAID/Vates/models/qn_mtp_weights.safetensors" not in joined
     assert command[command.index("--expert-slots") + 1] == "32"
     assert command[command.index("--spec-slots") + 1] == "16"
     assert command[command.index("-k") + 1] == "3"
@@ -113,6 +136,19 @@ def test_main_reports_missing_raid_without_exec(monkeypatch, capsys):
     monkeypatch.setattr(os, "execve", lambda *args: pytest.fail("execve must not run"))
     assert launcher.main([]) == 2
     assert "Leonard's RAID is not mounted" in capsys.readouterr().err
+
+
+def test_main_reports_missing_internal_assets_without_exec(monkeypatch, capsys):
+    launcher = _load_launcher()
+    monkeypatch.setattr(os.path, "ismount", lambda path: True)
+
+    def reject_missing_assets():
+        raise RuntimeError("Internal MTP weights are missing")
+
+    monkeypatch.setattr(launcher, "ensure_internal_runtime_assets", reject_missing_assets)
+    monkeypatch.setattr(os, "execve", lambda *args: pytest.fail("execve must not run"))
+    assert launcher.main([]) == 2
+    assert "Internal MTP weights are missing" in capsys.readouterr().err
 
 
 def test_main_reports_profile_override_without_exec(monkeypatch, capsys):
