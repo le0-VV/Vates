@@ -22,3 +22,12 @@
 - [x] Rank candidates by reproducible long-context prefill/decode improvement with no artificial throughput floor; correctness, bounded pressure and stability remain hard gates.
 - [x] Present evidence-backed options and trade-offs for user approval before changing the persistent server profile or implementation.
 - [x] Restore and verify the reviewed persistent server after experiments, retaining only explicitly approved speed changes.
+
+# Repeat exact 131k stress at w16/40r/24s/k3
+
+- [x] Reconstruct and review the exact 131,071-prompt-token plus one-token-decode harness from the preserved validation evidence.
+- [x] Record the current reviewed server identity and health, then stop it only after the detached supervisor is ready.
+- [x] Launch a transient w16/40r/24s/k3 run with fail-fast token gates, continuous resource sampling and automatic restoration of the reviewed 32/16/K=3 server.
+- [x] Track every 2,048-token checkpoint, stage throughput, boundary decode, correctness, KV growth, peak MLX/RSS, macOS memory-pressure level, free memory and swap.
+- [x] On completion or limitation, preserve result logs, remove only temporary harness/monitor state and independently verify health, model enumeration and exact `VATES_OK`.
+- [x] Compare the repeat with the qualified w16/40r/24s/k3 run, document memory headroom and present evidence-backed options without changing the persistent profile.

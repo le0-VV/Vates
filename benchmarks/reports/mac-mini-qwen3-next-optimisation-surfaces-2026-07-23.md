@@ -342,6 +342,58 @@ validation length. The result qualifies the joint candidate for user
 consideration, but does not authorise changing the reviewed persistent
 32/16/K=3 profile.
 
+## Exact 131,072-token w16/40r/24s/k3 repeat
+
+A second fresh-process run repeated the exact candidate workload to measure
+reproducibility and locate peak system pressure by context level. The profile
+is abbreviated **w16/40r/24s/k3**: prediction width 16, 40 real expert slots,
+24 speculative slots and MTP `K=3`.
+
+All correctness evidence reproduced. Stage tokens were again 88, 13, 220 and
+79; feeding token 79 advanced every cache from 131,071 to exactly 131,072
+tokens and produced following token 220. The final-logit SHA-256 remained
+`7817f7d722692fa5cd50e11447bf217d2ee038828100e863697fa98b483709c4`.
+
+| Metric | Qualification | Repeat | Repeat change |
+| --- | ---: | ---: | ---: |
+| Prompt prefill | 7.2446 tok/s | 6.9507 tok/s | -4.1% |
+| Prefill time | 18,092.26 s | 18,857.28 s | +765.02 s |
+| Boundary decode | 0.2085 s | 0.2061 s | -1.1% latency |
+| Peak MLX allocation | 8.685 GB | 8.685 GB | effectively identical |
+| Peak RSS | 6.208 GB | 5.681 GB | -0.527 GB |
+| Minimum sampled free memory | 23% | 21% | -2 percentage points |
+| Maximum sampled swap | 2,668 MiB | 1,872.75 MiB | -795 MiB |
+| Demand loads | 4,997,147 | 4,966,756 | -0.6% |
+| Resident hits | 57,774,037 | 57,805,648 | +0.1% |
+
+Repeat stage throughput was 9.052, 7.660, 6.449 and 5.573 tok/s across the
+four 32k intervals. The lower whole-run throughput occurred despite slightly
+fewer demand loads, so it reflects run-to-run system and scheduling variance
+rather than a correctness or residency regression.
+
+The lowest sampled free-memory reading was 21% at 15:40:31 UTC, first reached
+between the 79,872- and 81,920-token checkpoints and closest to 81,920 tokens.
+At that sample RSS was 5,365,776 KiB, swap use was 1,707.06 MiB and the
+compressor occupied 225,816 pages. Free memory recovered afterwards. Swap
+peaked later at 1,872.75 MiB near 90k–92k tokens, then fell to 1,824.75 MiB by
+the final sample. There was no unbounded pressure trend, allocation failure or
+cache-integrity failure.
+
+The repeat therefore confirms bounded memory headroom but also shows that
+w16/40r/24s/k3 is not excessively conservative on a 16 GB system: the
+system-wide free-memory floor is already approximately one fifth under this
+synthetic sustained load. A further memory experiment remains reasonable only
+as a gated one-variable screen. Because real residency previously reduced
+demand loads more strongly than speculative residency, the next candidate
+should be **w16/48r/24s/k3**. The prior slot increments imply approximately
+0.68 GB additional MLX allocation, but that is a projection requiring direct
+measurement; it does not authorise a persistent change.
+
+After the repeat, the supervisor restored the original RAID-backed model with
+internal MTP and experts at fixed 32/16/K=3. Independent `/health`,
+`/v1/models` and exact `VATES_OK` checks passed. Temporary harness, bytecode
+and PID state were removed while all result logs were preserved.
+
 ## Exact 262,144-token stretch
 
 The pinned model configuration declares `max_position_embeddings=262144`,
@@ -405,11 +457,14 @@ while the JSONL, resource, supervisor and final-logit files were preserved.
    costs approximately 1.36 GB more peak MLX allocation and reduced minimum
    sampled free memory to 23% at 131k and 18% at 262k.
 3. **Continue optimisation before changing the profile.** The next high-value
-   work is long-context attention/KV scaling rather than increasing GPU
-   utilisation for its own sake. A matched 262k 32/16 baseline would quantify
-   the candidate's stretch-length gain, but costs roughly another half-day run.
-   Partial width or residency profiles remain short-screen evidence only and
-   should not be represented as long-context-qualified alternatives.
+   work is either a gated w16/48r/24s/k3 residency screen or long-context
+   attention/KV scaling, not increasing GPU utilisation for its own sake. The
+   residency screen should proceed to an exact 131k run only if it reduces
+   critical-path loads and improves throughput without crossing the pressure
+   gate. A matched 262k 32/16 baseline would quantify the candidate's
+   stretch-length gain, but costs roughly another half-day run. Partial width
+   or residency profiles remain short-screen evidence only and should not be
+   represented as long-context-qualified alternatives.
 
 The persistent profile remains unchanged pending explicit user approval.
 
