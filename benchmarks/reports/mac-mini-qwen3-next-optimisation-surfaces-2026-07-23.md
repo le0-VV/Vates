@@ -306,6 +306,113 @@ passed. Temporary harness, bytecode and PID state were removed while all result
 logs were preserved. The 40/24/width-16 profile remains a short-context lead,
 not an approved persistent or long-context configuration.
 
+## Exact 131,072-token candidate qualification
+
+The joint prediction-width and residency lead completed the required exact
+long-context qualification with:
+
+- cross-layer prediction width 16;
+- 40 real expert slots and 24 speculative slots;
+- MTP `K=3`, two-token prefill chunks and quantised-KV growth step 256;
+- no persistent profile or implementation change.
+
+The fail-fast stage tokens at 32,768, 65,536, 98,304 and 131,071 prompt tokens
+were 88, 13, 220 and 79, matching the preserved baseline. Feeding token 79
+advanced every cache from 131,071 to exactly 131,072 tokens and produced the
+required following token 220.
+
+| Metric | Reviewed 32/16 baseline | Width16/real40/spec24 | Change |
+| --- | ---: | ---: | ---: |
+| Prompt prefill | 5.786 tok/s | 7.2446 tok/s | +25.2% |
+| One-token boundary decode | 0.2598 s | 0.2085 s | -19.8% latency |
+| Peak MLX allocation | 7.326 GB | 8.685 GB | +1.359 GB |
+| Peak RSS | 4.911 GB | 6.208 GB | +1.297 GB |
+| Minimum sampled free memory | 32% | 23% | -9 percentage points |
+| Maximum sampled swap | 3,326 MiB | 2,668 MiB | -658 MiB |
+| Final KV bytes | — | 805,306,368 | — |
+
+The candidate recorded 4,997,147 demand loads, 57,774,037 resident hits,
+1,454,003 GPU fast-path acquisitions and 1,691,773 fallbacks. System-wide
+`disk0` counters increased by an average of approximately 937 MB/s and 3,231
+transfers/s over the 18,100-second resource trace. The final-logit SHA-256 was
+`7817f7d722692fa5cd50e11447bf217d2ee038828100e863697fa98b483709c4`.
+
+Correctness, pressure and stability therefore passed at the production
+validation length. The result qualifies the joint candidate for user
+consideration, but does not authorise changing the reviewed persistent
+32/16/K=3 profile.
+
+## Exact 262,144-token stretch
+
+The pinned model configuration declares `max_position_embeddings=262144`,
+with no RoPE scaling and no sliding window. The same transient joint candidate
+therefore attempted the separate 262,144-token stretch.
+
+The first four stage tokens again matched 88, 13, 220 and 79. The ungated
+196,608-token stage produced token 198. At 262,143 prompt tokens the model
+produced token 20,221; feeding it advanced every cache to exactly 262,144 and
+produced following token 9,370.
+
+| Prompt interval | Stage throughput | Cumulative throughput |
+| --- | ---: | ---: |
+| 0–32,768 | 9.1799 tok/s | 9.1799 tok/s |
+| 32,768–65,536 | 8.1014 tok/s | 8.6070 tok/s |
+| 65,536–98,304 | 6.6328 tok/s | 7.8301 tok/s |
+| 98,304–131,071 | 5.6370 tok/s | 7.1361 tok/s |
+| 131,071–196,608 | 4.8801 tok/s | 6.1833 tok/s |
+| 196,608–262,143 | 3.6878 tok/s | 5.2886 tok/s |
+
+The full prefill took 49,567.44 seconds, or 13 hours 46 minutes 7 seconds.
+The one-token boundary decode took 0.4609 seconds. Peak MLX allocation was
+9.567 GB, peak RSS was 6.289 GB, minimum sampled free memory was 18%, and
+maximum sampled swap use was 3,084 MiB. Final quantised KV capacity was 262,398
+tokens and 1,612,173,312 bytes. System-wide `disk0` counters averaged
+approximately 681 MB/s and 2,413 transfers/s across the 49,574-second resource
+trace.
+
+The run recorded 9,703,647 demand loads, 115,833,572 resident hits, 3,045,667
+GPU fast-path acquisitions and 3,245,885 fallbacks. The final-logit SHA-256
+was `6db97f1105eb2e9005bc9c9fc9e80ab2fc9172c0fcf09101a734820c1bcc14ea`.
+
+The 131,071-to-196,608 interval did not emit the intended intermediate
+2,048-token checkpoints. Because the stage began at an odd absolute position
+and advanced in two-token chunks, intermediate positions remained odd and
+could not satisfy `absolute % 2048 == 0`. Resource logging continued throughout
+and the exact 196,608-token stage event passed. Future harnesses should compare
+distance from the stage start rather than absolute modulo so observability is
+not lost across an odd stage boundary.
+
+This stretch proves exact 262,144-token model/runtime support, cache integrity,
+bounded pressure and operational recovery. It does not establish a 262k
+performance gain because no equivalent 262k reviewed-profile baseline exists.
+Comparing its 5.2886 tok/s directly with the 5.786 tok/s 131k baseline would
+confound profile and context length.
+
+After the stretch, the supervisor restored the reviewed server with the
+original RAID-backed model, internal MTP, internal experts and fixed
+32/16/K=3. Independent checks passed `/health`, `/v1/models` and an exact
+`VATES_OK` inference. The transient harness, PID and bytecode state was removed
+while the JSONL, resource, supervisor and final-logit files were preserved.
+
+## Evidence-backed choices
+
+1. **Keep the reviewed 32/16/K=3 profile.** This retains the lower 7.326 GB
+   peak MLX baseline and the existing operational margin. It forgoes the
+   measured 25.2% 131k prefill gain and 19.8% boundary-decode latency reduction.
+2. **Approve width16/real40/spec24 for the persistent profile.** This is the
+   strongest evidence-backed speed choice at 131k: correct, stable and
+   repeatable through the exact boundary, with demonstrated 262k support. It
+   costs approximately 1.36 GB more peak MLX allocation and reduced minimum
+   sampled free memory to 23% at 131k and 18% at 262k.
+3. **Continue optimisation before changing the profile.** The next high-value
+   work is long-context attention/KV scaling rather than increasing GPU
+   utilisation for its own sake. A matched 262k 32/16 baseline would quantify
+   the candidate's stretch-length gain, but costs roughly another half-day run.
+   Partial width or residency profiles remain short-screen evidence only and
+   should not be represented as long-context-qualified alternatives.
+
+The persistent profile remains unchanged pending explicit user approval.
+
 ## Acceptance sequence
 
 1. Reject unsafe, incorrect or unstable candidates in short screens.
