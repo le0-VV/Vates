@@ -49,7 +49,12 @@
 - [x] Stop every current Vates model process and reserve the Mac mini for Qwen3.5 experiments.
 - [ ] Acquire and verify the pinned canonical Qwen3.5 MLX 4-bit source without deleting existing model files.
 - [ ] Establish a small-context reference for text, thinking, non-thinking, image and tool-call behaviour.
-- [ ] Generalise Vates' model assembly and expert-streaming boundaries, then add the Qwen3.5 MoE adapter.
+- [x] Generalise Vates' model assembly and expert-streaming boundaries, then add the Qwen3.5 MoE adapter.
+- [x] Add the non-speculative general generation engine with exact pending-token cache semantics.
+  - [x] Preserve and run the focused RED engine tests.
+  - [x] Implement chunked prefill, greedy decode, cancellation and per-request state isolation.
+  - [x] Route the CLI and TUI backend through an engine-neutral boundary.
+  - [x] Run focused engine/backend/portable verification and create a signed focused commit.
 - [ ] Add standard OpenAI image attachments, reasoning fields and protocol-only tool calling.
 - [ ] Reach a correct, stable exact 131,072-token boundary with Qwen3.5 before any performance tuning.
 - [ ] Run and publish the standardised text, reasoning, code, tool, vision and long-context intelligence suite.

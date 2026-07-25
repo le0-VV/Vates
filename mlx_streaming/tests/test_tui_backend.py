@@ -1,6 +1,12 @@
 """TUI 后端抽象:FakeBackend 的加载/流式/中断行为,及 banner 常量存在。"""
 from mlx_streaming.tui.backend import (
-    FakeBackend, GenResult, _common_prefix_len, _reuse_prefix_len)
+    FakeBackend,
+    GeneralMLXBackend,
+    GenResult,
+    _common_prefix_len,
+    _reuse_prefix_len,
+    backend_for_args,
+)
 from mlx_streaming.tui.banner import LOGO
 
 
@@ -49,6 +55,64 @@ def test_fake_backend_records_seen_messages():
     msgs = [{"role": "user", "content": "问题"}]
     b.generate(msgs, lambda full, n: False)
     assert b.seen_messages[-1] == [{"role": "user", "content": "问题"}]
+
+
+def test_backend_factory_selects_general_or_mtp_engine():
+    import types
+
+    assert isinstance(
+        backend_for_args(types.SimpleNamespace(engine="general")),
+        GeneralMLXBackend,
+    )
+    assert backend_for_args(types.SimpleNamespace(engine="mtp")).__class__.__name__ == (
+        "MLXBackend"
+    )
+
+
+def test_general_backend_streams_cumulative_text(monkeypatch):
+    import types
+
+    import mlx_streaming.cli as cli_mod
+    from mlx_streaming.runtime.engine import GenerationDelta, GenerationResult
+
+    seen = {}
+
+    class Engine:
+        def generate(self, request, on_delta):
+            seen["request"] = request
+            on_delta(GenerationDelta("A", 4, 1))
+            on_delta(GenerationDelta("B", 5, 2))
+            return GenerationResult(
+                text="AB",
+                token_ids=(4, 5),
+                prompt_tokens=7,
+                generated_tokens=2,
+                prefill_seconds=0.25,
+                decode_seconds=0.25,
+                peak_mlx_bytes=123,
+                cache_offsets=(8,),
+                stopped=False,
+            )
+
+    monkeypatch.setattr(cli_mod, "_build_general_engine", lambda args, on_status: Engine())
+    args = types.SimpleNamespace(
+        max_tokens=2,
+        thinking_default=True,
+        engine="general",
+    )
+    backend = GeneralMLXBackend(args)
+    backend.load(lambda _message: None)
+    streamed = []
+
+    result = backend.generate(
+        [{"role": "user", "content": "test"}],
+        lambda text, count: streamed.append((text, count)) or False,
+    )
+
+    assert streamed == [("A", 1), ("AB", 2)]
+    assert seen["request"].enable_thinking is True
+    assert seen["request"].max_tokens == 2
+    assert result == GenResult("AB", 2, 4.0, stopped=False)
 
 
 def test_mlx_backend_stops_generation_on_eos(monkeypatch):

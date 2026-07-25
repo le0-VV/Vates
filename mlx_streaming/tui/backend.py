@@ -188,3 +188,61 @@ class MLXBackend:
         text = tok.decode(out_ids)
         tps = len(out_ids) / dt if dt > 0 else 0.0
         return GenResult(text, len(out_ids), tps, stopped=stopped["v"])
+
+
+class GeneralMLXBackend:
+    """Adapter-backed baseline backend without an MTP drafter."""
+
+    def __init__(self, args):
+        self.args = args
+        self._engine = None
+
+    def load(
+        self,
+        on_status: Callable[[str], None],
+        *,
+        strict_warmup: bool = False,
+    ) -> None:
+        from mlx_streaming.cli import _build_general_engine
+
+        self._engine = _build_general_engine(self.args, on_status=on_status)
+        on_status("General model engine ready")
+
+    def generate(self, messages, on_text) -> GenResult:
+        from mlx_streaming.runtime.engine import GenerationRequest
+
+        if self._engine is None:
+            raise RuntimeError("general model engine is not loaded")
+
+        cumulative = ""
+
+        def on_delta(delta):
+            nonlocal cumulative
+            cumulative += delta.text
+            return on_text(cumulative, delta.generated_tokens)
+
+        result = self._engine.generate(
+            GenerationRequest(
+                messages=messages,
+                max_tokens=self.args.max_tokens,
+                enable_thinking=self.args.thinking_default,
+            ),
+            on_delta,
+        )
+        elapsed = result.prefill_seconds + result.decode_seconds
+        tok_per_s = result.generated_tokens / elapsed if elapsed > 0 else 0.0
+        return GenResult(
+            result.text,
+            result.generated_tokens,
+            tok_per_s,
+            stopped=result.stopped,
+        )
+
+
+def backend_for_args(args) -> ChatBackend:
+    engine = getattr(args, "engine", "mtp")
+    if engine == "general":
+        return GeneralMLXBackend(args)
+    if engine == "mtp":
+        return MLXBackend(args)
+    raise ValueError(f"unsupported engine {engine!r}")

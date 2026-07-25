@@ -97,6 +97,38 @@ def _build_engine(args, on_status=None):
     return model, tok, drafter
 
 
+def _build_general_engine(args, on_status=None):
+    """Build the adapter-selected greedy engine without MTP-only dependencies."""
+
+    def _emit(message):
+        if on_status is not None:
+            on_status(message)
+        else:
+            print(message, file=sys.stderr, flush=True)
+
+    import os
+
+    os.environ["MODEL"] = args.model
+    os.environ["EXPERT_DIR"] = args.expert_dir
+    os.environ["EXPERT_SLOTS"] = str(args.expert_slots)
+
+    from mlx_streaming.model_builder import build_streaming_model
+    from mlx_streaming.models import adapter_for_path
+    from mlx_streaming.runtime.engine import GeneralModelEngine
+
+    if args.adapter != "auto":
+        raise ValueError(f"unsupported adapter selection {args.adapter!r}")
+    adapter = adapter_for_path(args.model)
+    _emit(f"Loading {adapter.architecture} model and streamed experts")
+    model, processor, _store = build_streaming_model(adapter=adapter)
+    return GeneralModelEngine(
+        model=model,
+        processor=processor,
+        adapter=adapter,
+        prefill_chunk_size=args.prefill_chunk_size,
+    )
+
+
 def _warmup(model, tok, drafter, args, *, strict=False):
     """跑一次生成做预热:首轮的明显卡顿主要来自现编译 Metal kernel + 填 MoE 专家 resident 池,
     提前把这部分一次性开销移到加载阶段。
@@ -177,8 +209,8 @@ def cmd_chat(args):
                   "均为模拟,不加载模型。按 Esc 可中断,/help 看命令。",
             delay=0.03)
         return run_tui(demo, args)
-    from mlx_streaming.tui.backend import MLXBackend
-    return run_tui(MLXBackend(args), args)
+    from mlx_streaming.tui.backend import backend_for_args
+    return run_tui(backend_for_args(args), args)
 
 
 def _chat_repl(args):
@@ -280,6 +312,35 @@ def _add_chat_args(p):
                    help="常驻专家池容量(默认 32,同时作为侧区行数默认)")
     p.add_argument("--spec-slots", type=int, default=None,
                    help="侧区行数 POOL_SPEC_SLOTS(默认跟随 --expert-slots)")
+    p.add_argument(
+        "--engine",
+        choices=("mtp", "general"),
+        default="mtp",
+        help="generation engine (default: mtp)",
+    )
+    p.add_argument(
+        "--adapter",
+        default="auto",
+        help="model adapter selection (default: auto)",
+    )
+    p.add_argument(
+        "--context-length",
+        type=int,
+        default=131072,
+        help="maximum context length (default: 131072)",
+    )
+    p.add_argument(
+        "--prefill-chunk-size",
+        type=int,
+        default=64,
+        help="general-engine prefill chunk size (default: 64)",
+    )
+    p.add_argument(
+        "--thinking-default",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="enable model thinking by default",
+    )
     p.add_argument("--system", default=None, help="可选 system 提示词")
     p.add_argument("--stats", action="store_true",
                    help="每轮结束在 stderr 打印 token 数 / tok·s / 接受长度")
@@ -295,13 +356,13 @@ def cmd_serve(args):
     import logging
 
     from mlx_streaming.server import serve
-    from mlx_streaming.tui.backend import MLXBackend
+    from mlx_streaming.tui.backend import backend_for_args
 
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    backend = MLXBackend(args)
+    backend = backend_for_args(args)
     backend.load(
         lambda message: print(message, file=sys.stderr, flush=True),
         strict_warmup=True,

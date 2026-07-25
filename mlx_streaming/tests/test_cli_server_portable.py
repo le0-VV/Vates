@@ -25,12 +25,20 @@ def test_parser_preserves_chat_defaults_and_adds_serve():
     assert chat.func is cli_mod.cmd_chat
     assert chat.k == 3
     assert chat.max_tokens == 4096
+    assert chat.engine == "mtp"
 
-    serve = cli_mod._build_parser().parse_args(["serve"])
+    serve = cli_mod._build_parser().parse_args(
+        ["serve", "--engine", "general", "--no-thinking-default"]
+    )
     assert serve.func is cli_mod.cmd_serve
     assert serve.host == "127.0.0.1"
     assert serve.port == 8000
     assert serve.model_id == MODEL_ID
+    assert serve.engine == "general"
+    assert serve.adapter == "auto"
+    assert serve.context_length == 131072
+    assert serve.prefill_chunk_size == 64
+    assert serve.thinking_default is False
 
 
 def test_main_dispatches_explicit_serve(monkeypatch):
