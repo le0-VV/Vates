@@ -241,9 +241,14 @@ def cache_offsets(self, cache):
     )
 ```
 
-- [ ] **Step 6: Test text and image embedding delegation**
+- [ ] **Step 6: Test text and image preparation and embedding delegation**
 
-Assert text-only `prepare_inputs()` delegates to `model.get_input_embeddings(input_ids, None, mask=mask)` and image input delegates with `pixel_values` and `image_grid_thw` produced by the processor. No server code may reach into `vision_tower` directly.
+Assert `prepare_inputs()` renders the official template with `tokenize=False`,
+passes that rendered string and the normalised images to
+`mlx_vlm.utils.prepare_inputs()`, then delegates text-only embeddings to
+`model.get_input_embeddings(input_ids, None, mask=mask)` and image embeddings
+with the returned `pixel_values` and `image_grid_thw`. No server code may reach
+into `vision_tower` directly.
 
 - [ ] **Step 7: Run the adapter tests**
 
@@ -545,7 +550,7 @@ Require the adapter to call:
 ```python
 processor.apply_chat_template(
     messages,
-    tokenize=True,
+    tokenize=False,
     add_generation_prompt=True,
     tools=tools or None,
     enable_thinking=enable_thinking,
