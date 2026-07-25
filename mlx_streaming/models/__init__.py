@@ -14,6 +14,7 @@ from mlx_streaming.models.registry import (
     adapter_for_path,
     register_adapter,
 )
+from mlx_streaming.models.qwen35 import QWEN35_ADAPTER, Qwen35MoeAdapter
 
 __all__ = [
     "DuplicateArchitecture",
@@ -22,6 +23,8 @@ __all__ = [
     "LoadedModel",
     "ModelAdapter",
     "ModelDimensions",
+    "QWEN35_ADAPTER",
+    "Qwen35MoeAdapter",
     "UnsupportedArchitecture",
     "adapter_for_config",
     "adapter_for_path",

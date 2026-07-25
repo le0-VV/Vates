@@ -25,6 +25,7 @@ def test_portable_server_imports_do_not_load_mlx():
     check = """
 import sys
 import mlx_streaming.cli
+import mlx_streaming.models.registry
 import mlx_streaming.server
 import mlx_streaming.tui.backend
 
