@@ -58,7 +58,7 @@
 - [ ] Add standard OpenAI image attachments, reasoning fields and protocol-only tool calling.
   - [x] Add strict streaming reasoning separation and malformed-output gates.
   - [x] Validate OpenAI function schemas and parse Qwen tool XML without executing tools.
-  - [ ] Normalise bounded data-URL and public-HTTPS image attachments.
+  - [x] Normalise bounded data-URL and public-HTTPS image attachments.
   - [ ] Integrate reasoning, tools and images into OpenAI request/response handling.
 - [ ] Reach a correct, stable exact 131,072-token boundary with Qwen3.5 before any performance tuning.
 - [ ] Run and publish the standardised text, reasoning, code, tool, vision and long-context intelligence suite.
