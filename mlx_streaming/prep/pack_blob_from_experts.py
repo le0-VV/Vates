@@ -13,6 +13,7 @@ import mlx.core as mx
 import numpy as np
 
 from mlx_streaming.prep.blob_layout import layout_for, BLOB_V1_AFFINE, BLOB_V2_MXFP4
+from mlx_streaming.prep.expert_manifest import read_manifest
 
 EXPERT_DIR = os.environ.get("EXPERT_DIR", "/tmp/qwen3_next_experts_8bit_g128")
 OUT = os.environ.get("BLOB_DIR", "/tmp/cb_8bit_blob")
@@ -21,11 +22,34 @@ GROUP = int(os.environ.get("GROUP", "128"))
 
 
 def _meta():
+    manifest_path = os.path.join(EXPERT_DIR, "expert_manifest.json")
+    if os.path.exists(manifest_path):
+        manifest = read_manifest(manifest_path)
+        return (
+            manifest.num_experts,
+            manifest.hidden_size,
+            manifest.expert_intermediate_size,
+            BLOB_V1_AFFINE,
+            manifest.quant_mode,
+        )
     m = json.load(open(os.path.join(EXPERT_DIR, "_split_meta.json")))
     d = m["dims"]
     fmt = m.get("blob_format", BLOB_V1_AFFINE)
     return (int(d["num_experts"]), int(d["hidden"]), int(d["moe_intermediate"]),
             fmt, d.get("quant_mode", "affine"))
+
+
+def _quantization():
+    manifest_path = os.path.join(EXPERT_DIR, "expert_manifest.json")
+    if os.path.exists(manifest_path):
+        manifest = read_manifest(manifest_path)
+        bits = set(manifest.projection_bits.values())
+        if len(bits) != 1:
+            raise ValueError(
+                "blob packing requires one quantization bit-width across projections"
+            )
+        return bits.pop(), manifest.group_size
+    return BITS, GROUP
 
 
 def _raw_bytes(arr) -> bytes:
@@ -58,6 +82,9 @@ def pack_layer(layer, num_experts, segs, stride, fmt, quant_mode) -> None:
 def _resolve_layers(spec: str, num_experts: int) -> list:
     spec = spec.strip()
     if spec.lower() == "all":
+        manifest_path = os.path.join(EXPERT_DIR, "expert_manifest.json")
+        if os.path.exists(manifest_path):
+            return list(read_manifest(manifest_path).layer_indices)
         layers = set()
         for name in os.listdir(EXPERT_DIR):
             if name.startswith("layer") and name.endswith("_expert000.safetensors"):
@@ -69,14 +96,15 @@ def _resolve_layers(spec: str, num_experts: int) -> list:
 def main():
     os.makedirs(OUT, exist_ok=True)
     num_experts, hidden, inter, fmt, quant_mode = _meta()
-    segs, stride = layout_for(fmt, hidden, inter, BITS, GROUP)
+    bits, group = _quantization()
+    segs, stride = layout_for(fmt, hidden, inter, bits, group)
     layers = _resolve_layers(os.environ.get("LAYERS", "all"), num_experts)
     for i, L in enumerate(layers):
         pack_layer(L, num_experts, segs, stride, fmt, quant_mode)
         print(f"  layer {L} packed ({i+1}/{len(layers)})", flush=True)
     summary = {"format": fmt, "quant_mode": quant_mode, "stride": stride,
                "page_aligned": stride % 16384 == 0, "num_experts": num_experts,
-               "layers": layers, "bits": BITS, "group_size": GROUP}
+               "layers": layers, "bits": bits, "group_size": group}
     with open(os.path.join(OUT, "blob_index.json"), "w") as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)
     print(json.dumps({"out": OUT, "n_layers": len(layers), "stride_bytes": stride,

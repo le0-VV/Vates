@@ -1,12 +1,15 @@
 """模型 patch：把原生 MoE 块替换成流式块（文件后端 / 常驻切片版），并按需挂跨层预取。"""
 from mlx_streaming import config
 from mlx_streaming.core.moe.block import FileStreamingMoeBlock, StreamingMoeBlock
+from mlx_streaming.models.base import ModelDimensions
 from mlx_streaming.core.prefetch.cross_layer import enable_cross_layer_prefetch
 
 
-def patch_model_filebacked(model, store, hidden, moe_inter, group_size, bits,
+def patch_model_filebacked(model, store, hidden=None, moe_inter=None,
+                           group_size=None, bits=None,
                            proj_bits: dict | None = None,
-                           layer_proj_bits: dict | None = None):
+                           layer_proj_bits: dict | None = None, *,
+                           adapter=None, manifest=None):
     """把每个 MoE 块替换为 FileStreamingMoeBlock，并丢弃常驻的堆叠 switch_mlp。
 
     store：FileExpertStore（所有 MoE 层共用，按 (layer,expert) 缓存）。
@@ -15,6 +18,77 @@ def patch_model_filebacked(model, store, hidden, moe_inter, group_size, bits,
         对应 requantize_dir_layered 产出。各层 QSL 用该层 bit，与流式存盘文件一一对应。
     返回被替换的层数。被替换后原 switch_mlp 不再被引用，惰性权重不会被物化。
     """
+    if adapter is not None:
+        if manifest is None:
+            raise ValueError("adapter-driven patching requires an expert manifest")
+        specs = adapter.expert_layers(model)
+        if not specs:
+            raise ValueError("adapter reported no routed expert layers")
+        first = specs[0]
+        dimensions = ModelDimensions(
+            architecture=adapter.architecture,
+            hidden_size=first.hidden_size,
+            num_layers=len(specs),
+            num_experts=first.num_experts,
+            top_k=first.top_k,
+            expert_intermediate_size=first.intermediate_size,
+            shared_expert_intermediate_size=None,
+            quant_mode=manifest.quant_mode,
+            quant_bits=manifest.projection_bits["gate_proj"],
+            quant_group_size=manifest.group_size,
+            max_context=0,
+        )
+        manifest.validate_against(dimensions, require_complete=True)
+        manifest.verify_files(store.root)
+        layers = tuple(adapter.layers(model))
+        if len(layers) != len(specs):
+            raise ValueError(
+                f"adapter layer/spec count mismatch: {len(layers)} != {len(specs)}"
+            )
+        prefetch_model = getattr(adapter.language_model(model), "model", model)
+        patched = 0
+        for layer, spec in zip(layers, specs):
+            if spec.layer_index != patched:
+                raise ValueError(
+                    f"expert layer index mismatch: expected {patched}, "
+                    f"got {spec.layer_index}"
+                )
+            layer._layer_idx = spec.layer_index
+            object.__setattr__(layer, "_prefetch_model_ref", prefetch_model)
+            block = spec.block
+            layer.mlp = FileStreamingMoeBlock(
+                gate=block.gate,
+                top_k=spec.top_k,
+                norm_topk_prob=spec.normalise_topk,
+                store=store,
+                layer_idx=spec.layer_index,
+                hidden=spec.hidden_size,
+                moe_inter=spec.intermediate_size,
+                group_size=manifest.group_size,
+                bits=manifest.projection_bits["gate_proj"],
+                proj_bits=manifest.projection_bits,
+                shared_expert=getattr(block, "shared_expert", None),
+                shared_expert_gate=getattr(block, "shared_expert_gate", None),
+            )
+            object.__setattr__(
+                layer.mlp, "_prefetch_model_ref", prefetch_model
+            )
+            patched += 1
+        if patched != len(specs):
+            raise ValueError(
+                f"patched {patched} expert layers, expected {len(specs)}"
+            )
+        if (
+            config.cross_layer_prefetch()
+            or getattr(store, "_staging", None) is not None
+        ):
+            enable_cross_layer_prefetch()
+        return patched
+
+    if None in (hidden, moe_inter, group_size, bits):
+        raise TypeError(
+            "legacy patching requires hidden, moe_inter, group_size and bits"
+        )
     patched = 0
     for i, layer in enumerate(model.layers):
         layer._layer_idx = i

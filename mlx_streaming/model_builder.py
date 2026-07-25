@@ -21,6 +21,7 @@ from mlx_lm.models.base import create_attention_mask, create_ssm_mask
 from mlx_streaming import config
 from mlx_streaming.core.cache.expert_store import FileExpertStore
 from mlx_streaming.core.prefetch.patch import patch_model_filebacked
+from mlx_streaming.prep.expert_manifest import read_manifest
 
 MODEL = config.model_path()
 EXPERT_DIR = config.expert_dir()
@@ -52,8 +53,27 @@ def load_pool_profile(expert_dir: str) -> "dict[int, int] | None":
     return None
 
 
-def build_streaming_model():
+def build_streaming_model(*, adapter=None):
     """用文件后端流式 patch 加载主模型(32GB 机器装不下 41GB 非流式)。"""
+    if adapter is not None:
+        loaded = adapter.load(MODEL, revision=None, lazy=True)
+        manifest = read_manifest(
+            os.path.join(EXPERT_DIR, "expert_manifest.json")
+        )
+        layer_caps = load_pool_profile(EXPERT_DIR)
+        store = FileExpertStore(
+            EXPERT_DIR,
+            capacity=EXPERT_SLOTS,
+            layer_caps=layer_caps,
+        )
+        patch_model_filebacked(
+            loaded.model,
+            store,
+            adapter=adapter,
+            manifest=manifest,
+        )
+        return loaded.model, loaded.processor, store
+
     model, tok = load(MODEL, lazy=True)
     # 取首个 MoE 维度
     dims = None
@@ -62,6 +82,7 @@ def build_streaming_model():
         if mlp is not None and hasattr(mlp, "switch_mlp") and hasattr(mlp, "gate"):
             gp = mlp.switch_mlp.gate_proj
             dims = {"hidden": gp.input_dims, "moe_inter": gp.output_dims,
+                    "num_experts": gp.num_experts,
                     "group_size": getattr(gp, "group_size", 64),
                     "bits": getattr(gp, "bits", 4)}
             break
@@ -170,13 +191,28 @@ def _make_blob_source(dims, group, bits):
     blob_dir = config.blob_dir() or os.path.join(EXPERT_DIR, "blobs")
     workers = config.stream_blob_workers()
     nocache = config.stream_blob_nocache(default="0")
-    num_experts = 512
-    idx_path = os.path.join(blob_dir, "blob_index.json")
-    if os.path.exists(idx_path):
-        with open(idx_path) as f:
-            num_experts = int(json.load(f).get("num_experts", num_experts))
+    num_experts = _blob_expert_count(
+        blob_dir,
+        expected=int(dims["num_experts"]),
+    )
     return BlobExpertSource(blob_dir, dims["hidden"], dims["moe_inter"], group, bits,
                             num_experts=num_experts, workers=workers, nocache=nocache)
+
+
+def _blob_expert_count(blob_dir: str, *, expected: int) -> int:
+    index_path = os.path.join(blob_dir, "blob_index.json")
+    if not os.path.isfile(index_path):
+        raise ValueError(f"blob_index.json is missing from {blob_dir}")
+    with open(index_path, encoding="utf-8") as handle:
+        index = json.load(handle)
+    actual = index.get("num_experts")
+    if isinstance(actual, bool) or not isinstance(actual, int) or actual <= 0:
+        raise ValueError("blob_index.json num_experts must be a positive integer")
+    if actual != expected:
+        raise ValueError(
+            f"blob_index.json has {actual} experts, expected {expected}"
+        )
+    return actual
 
 
 def _attach_blob_source(model, dims, group, bits):
@@ -187,11 +223,10 @@ def _attach_blob_source(model, dims, group, bits):
     blob_dir = config.blob_dir() or os.path.join(EXPERT_DIR, "blobs")
     workers = config.stream_blob_workers()
     nocache = config.stream_blob_nocache(default="1")
-    num_experts = 512
-    idx_path = os.path.join(blob_dir, "blob_index.json")
-    if os.path.exists(idx_path):
-        with open(idx_path) as f:
-            num_experts = int(json.load(f).get("num_experts", num_experts))
+    num_experts = _blob_expert_count(
+        blob_dir,
+        expected=int(dims["num_experts"]),
+    )
     src = BlobExpertSource(blob_dir, dims["hidden"], dims["moe_inter"], group, bits,
                            num_experts=num_experts, workers=workers, nocache=nocache)
     for layer in model.layers:
