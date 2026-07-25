@@ -47,6 +47,7 @@
 - [x] Write, self-review, commit and obtain approval for the migration design.
 - [x] Write and review a test-driven implementation plan with explicit component and qualification boundaries.
 - [x] Stop every current Vates model process and reserve the Mac mini for Qwen3.5 experiments.
+- [x] Add a guarded protocol-only Qwen3.5 launcher with exact 131k defaults and one-process enforcement.
 - [ ] Acquire and verify the pinned canonical Qwen3.5 MLX 4-bit source without deleting existing model files.
 - [ ] Establish a small-context reference for text, thinking, non-thinking, image and tool-call behaviour.
 - [x] Generalise Vates' model assembly and expert-streaming boundaries, then add the Qwen3.5 MoE adapter.
