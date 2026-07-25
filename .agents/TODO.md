@@ -39,4 +39,4 @@
 - [x] Change only the approved prediction-width and expert-residency defaults.
 - [x] Run the focused regression test and the complete portable CI suite.
 - [x] Restart the server and verify its live command, health, model enumeration and exact `VATES_OK` response.
-- [ ] Record the approved persistent profile in the report and Brick, validate, commit, push and confirm PR CI.
+- [x] Record the approved persistent profile in the report and Brick, validate, commit, push and confirm PR CI.
