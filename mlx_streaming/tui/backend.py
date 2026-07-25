@@ -101,7 +101,12 @@ class MLXBackend:
         self._main_cache = None
         self._cached_ids: list[int] = []
 
-    def load(self, on_status: Callable[[str], None]) -> None:
+    def load(
+        self,
+        on_status: Callable[[str], None],
+        *,
+        strict_warmup: bool = False,
+    ) -> None:
         from mlx_streaming.cli import _build_engine, _warmup
 
         self._model, self._tok, self._drafter = _build_engine(
@@ -109,7 +114,13 @@ class MLXBackend:
         )
         # 预热:把首轮的 kernel 编译 + 专家池填充开销移到加载阶段,避免第一条消息莫名卡很久。
         on_status("预热中(编译 kernel + 填专家池)…")
-        _warmup(self._model, self._tok, self._drafter, self.args)
+        _warmup(
+            self._model,
+            self._tok,
+            self._drafter,
+            self.args,
+            strict=strict_warmup,
+        )
 
     def generate(self, messages, on_text) -> GenResult:
         import time

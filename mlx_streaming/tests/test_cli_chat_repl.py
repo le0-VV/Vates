@@ -6,6 +6,8 @@
 import builtins
 import types
 
+import pytest
+
 import mlx_streaming.cli as cli_mod
 import mlx_streaming.mtp.generate as gen_mod
 from mlx_streaming.tests.test_mtp_stream_hook import _kv_toy_k3
@@ -107,6 +109,23 @@ def test_warmup_swallows_errors(monkeypatch):
     monkeypatch.setattr(gen_mod, "mtp_generate", boom)
     model = _kv_toy_k3()
     cli_mod._warmup(model, None, object(), types.SimpleNamespace(k=3))   # 不抛异常即通过
+
+
+def test_warmup_propagates_errors_in_strict_mode(monkeypatch):
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("kernel compile failed")
+
+    monkeypatch.setattr(gen_mod, "mtp_generate", boom)
+    model = _kv_toy_k3()
+
+    with pytest.raises(RuntimeError, match="kernel compile failed"):
+        cli_mod._warmup(
+            model,
+            None,
+            object(),
+            types.SimpleNamespace(k=3),
+            strict=True,
+        )
 
 
 def test_chat_repl_reset_drops_cache(monkeypatch):
