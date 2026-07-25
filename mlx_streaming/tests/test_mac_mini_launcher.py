@@ -63,8 +63,8 @@ def test_command_uses_raid_only_for_original_model_assets():
         "qwen3-next-80b-a3b-instruct-4bit/experts"
     )
     assert "/Volumes/Leonard's RAID/Vates/models/qn_mtp_weights.safetensors" not in joined
-    assert command[command.index("--expert-slots") + 1] == "32"
-    assert command[command.index("--spec-slots") + 1] == "16"
+    assert command[command.index("--expert-slots") + 1] == "40"
+    assert command[command.index("--spec-slots") + 1] == "24"
     assert command[command.index("-k") + 1] == "3"
     assert command[-4:] == ["--plain", "--stats", "-n", "32"]
 
@@ -76,8 +76,8 @@ def test_command_accepts_explicit_serve_subcommand():
         "/Users/leonardw/Projects/Vates/.venv/bin/vates",
         "serve",
     ]
-    assert command[command.index("--expert-slots") + 1] == "32"
-    assert command[command.index("--spec-slots") + 1] == "16"
+    assert command[command.index("--expert-slots") + 1] == "40"
+    assert command[command.index("--spec-slots") + 1] == "24"
     assert command[command.index("-k") + 1] == "3"
     assert command[-4:] == ["--host", "0.0.0.0", "--port", "8000"]
 
@@ -120,8 +120,9 @@ def test_runtime_environment_is_fixed_and_preserves_unrelated_values():
     launcher = _load_launcher()
     environment = launcher.runtime_environment({"LANG": "en_GB.UTF-8", "EXPERT_SLOTS": "99"})
     assert environment["LANG"] == "en_GB.UTF-8"
-    assert environment["EXPERT_SLOTS"] == "32"
-    assert environment["POOL_SPEC_SLOTS"] == "16"
+    assert environment["EXPERT_SLOTS"] == "40"
+    assert environment["POOL_SPEC_SLOTS"] == "24"
+    assert environment["CROSS_LAYER_PREDICT_WIDTH"] == "16"
     assert environment["KV_QUANT"] == "1"
     assert environment["KV_K_BITS"] == "4"
     assert environment["KV_V_BITS"] == "3"

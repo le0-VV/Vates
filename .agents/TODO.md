@@ -31,3 +31,12 @@
 - [x] Track every 2,048-token checkpoint, stage throughput, boundary decode, correctness, KV growth, peak MLX/RSS, macOS memory-pressure level, free memory and swap.
 - [x] On completion or limitation, preserve result logs, remove only temporary harness/monitor state and independently verify health, model enumeration and exact `VATES_OK`.
 - [x] Compare the repeat with the qualified w16/40r/24s/k3 run, document memory headroom and present evidence-backed options without changing the persistent profile.
+
+# Promote w16/40r/24s/k3 to the persistent server profile
+
+- [x] Locate every persistent profile default and the existing launcher regression coverage.
+- [x] Add a regression test for w16/40r/24s/k3 defaults and verify that it fails for the old profile.
+- [x] Change only the approved prediction-width and expert-residency defaults.
+- [x] Run the focused regression test and the complete portable CI suite.
+- [x] Restart the server and verify its live command, health, model enumeration and exact `VATES_OK` response.
+- [ ] Record the approved persistent profile in the report and Brick, validate, commit, push and confirm PR CI.

@@ -22,8 +22,9 @@ MTP_PATH = INTERNAL_RUNTIME_DIR / "mtp/qn_mtp_weights.safetensors"
 EXPERT_DIR = INTERNAL_RUNTIME_DIR / "experts"
 
 RUNTIME_ENV = {
-    "EXPERT_SLOTS": "32",
-    "POOL_SPEC_SLOTS": "16",
+    "EXPERT_SLOTS": "40",
+    "POOL_SPEC_SLOTS": "24",
+    "CROSS_LAYER_PREDICT_WIDTH": "16",
     "STREAM_BLOB_LOADER": "1",
     "ZEROCOPY_DUAL_SOURCE": "1",
     "NATIVE_FUSED_PREFETCH": "1",
@@ -102,9 +103,9 @@ def build_command(extra_args: list[str]) -> list[str]:
         "--qn-config",
         str(MODEL_DIR / "config.json"),
         "--expert-slots",
-        "32",
+        "40",
         "--spec-slots",
-        "16",
+        "24",
         "-k",
         "3",
         *extra_args,

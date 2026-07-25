@@ -4,11 +4,13 @@
 
 This note records evidence-backed opportunities to accelerate the 4-bit
 Qwen3-Next-80B-A3B runtime on Leonard's 16 GB M4 Mac mini. It is an
-investigation ledger, not an approved persistent configuration.
+investigation ledger and records the resulting approved persistent
+configuration.
 
-The reviewed serving profile remains:
+The serving profile approved on 2026-07-25 is:
 
-- 32 real expert slots, 16 speculative side-region slots and MTP `K=3`;
+- prediction width 16, 40 real expert slots, 24 speculative side-region slots
+  and MTP `K=3`;
 - two-token prefill chunks;
 - K4/V3 quantised KV cache with group size 64 and rotation enabled;
 - original model and configuration on Leonard's RAID;
@@ -451,7 +453,7 @@ while the JSONL, resource, supervisor and final-logit files were preserved.
 1. **Keep the reviewed 32/16/K=3 profile.** This retains the lower 7.326 GB
    peak MLX baseline and the existing operational margin. It forgoes the
    measured 25.2% 131k prefill gain and 19.8% boundary-decode latency reduction.
-2. **Approve width16/real40/spec24 for the persistent profile.** This is the
+2. **Adopt width16/real40/spec24 for the persistent profile.** This is the
    strongest evidence-backed speed choice at 131k: correct, stable and
    repeatable through the exact boundary, with demonstrated 262k support. It
    costs approximately 1.36 GB more peak MLX allocation and reduced minimum
@@ -466,7 +468,10 @@ while the JSONL, resource, supervisor and final-logit files were preserved.
    or residency profiles remain short-screen evidence only and should not be
    represented as long-context-qualified alternatives.
 
-The persistent profile remains unchanged pending explicit user approval.
+The user approved option 2 on 2026-07-25. The persistent launcher and live
+server now use **w16/40r/24s/k3**; the two-token prefill chunk, quantised-KV
+settings, internal runtime paths and original RAID-backed model remain
+unchanged.
 
 ## Acceptance sequence
 
