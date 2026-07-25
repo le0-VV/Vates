@@ -40,3 +40,18 @@
 - [x] Run the focused regression test and the complete portable CI suite.
 - [x] Restart the server and verify its live command, health, model enumeration and exact `VATES_OK` response.
 - [x] Record the approved persistent profile in the report and Brick, validate, commit, push and confirm PR CI.
+
+# Run Qwen3.5-35B-A3B through a general-purpose Vates MoE runtime
+
+- [x] Research and agree the Qwen3.5 capability, context, storage, process and optimisation requirements.
+- [ ] Write, self-review, commit and obtain approval for the migration design.
+- [ ] Write and review a test-driven implementation plan with explicit component and qualification boundaries.
+- [ ] Stop every current Vates model process and reserve the Mac mini for Qwen3.5 experiments.
+- [ ] Acquire and verify the pinned canonical Qwen3.5 MLX 4-bit source without deleting existing model files.
+- [ ] Establish a small-context reference for text, thinking, non-thinking, image and tool-call behaviour.
+- [ ] Generalise Vates' model assembly and expert-streaming boundaries, then add the Qwen3.5 MoE adapter.
+- [ ] Add standard OpenAI image attachments, reasoning fields and protocol-only tool calling.
+- [ ] Reach a correct, stable exact 131,072-token boundary with Qwen3.5 before any performance tuning.
+- [ ] Run and publish the standardised text, reasoning, code, tool, vision and long-context intelligence suite.
+- [ ] Optimise configuration and runtime performance without weakening correctness or pressure gates.
+- [ ] Validate the complete repository, record Brick memory, commit signed changes, push the task branch and verify PR CI.
