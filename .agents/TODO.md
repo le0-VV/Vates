@@ -40,3 +40,10 @@
 - [x] Run the focused regression test and the complete portable CI suite.
 - [x] Restart the server and verify its live command, health, model enumeration and exact `VATES_OK` response.
 - [x] Record the approved persistent profile in the report and Brick, validate, commit, push and confirm PR CI.
+
+# Audit the served reasoning, vision and tool-use surface
+
+- [x] Inspect the model configuration and chat template for reasoning, multimodal and tool-use capabilities.
+- [x] Trace the OpenAI server request validation and response mapping for those three surfaces.
+- [x] Run separate live API probes for reasoning metadata, image input and structured tool calls.
+- [x] Report model capability versus server exposure, with concrete next steps for unsupported surfaces.
