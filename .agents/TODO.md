@@ -55,11 +55,11 @@
   - [x] Implement chunked prefill, greedy decode, cancellation and per-request state isolation.
   - [x] Route the CLI and TUI backend through an engine-neutral boundary.
   - [x] Run focused engine/backend/portable verification and create a signed focused commit.
-- [ ] Add standard OpenAI image attachments, reasoning fields and protocol-only tool calling.
+- [x] Add standard OpenAI image attachments, reasoning fields and protocol-only tool calling.
   - [x] Add strict streaming reasoning separation and malformed-output gates.
   - [x] Validate OpenAI function schemas and parse Qwen tool XML without executing tools.
   - [x] Normalise bounded data-URL and public-HTTPS image attachments.
-  - [ ] Integrate reasoning, tools and images into OpenAI request/response handling.
+  - [x] Integrate reasoning, tools and images into OpenAI request/response handling.
 - [ ] Reach a correct, stable exact 131,072-token boundary with Qwen3.5 before any performance tuning.
 - [ ] Run and publish the standardised text, reasoning, code, tool, vision and long-context intelligence suite.
 - [ ] Optimise configuration and runtime performance without weakening correctness or pressure gates.

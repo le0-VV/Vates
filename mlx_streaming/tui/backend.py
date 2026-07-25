@@ -209,6 +209,20 @@ class GeneralMLXBackend:
         on_status("General model engine ready")
 
     def generate(self, messages, on_text) -> GenResult:
+        from types import SimpleNamespace
+
+        if self._engine is None:
+            raise RuntimeError("general model engine is not loaded")
+        request = SimpleNamespace(
+            messages=messages,
+            images=[],
+            tools=(),
+            enable_thinking=self.args.thinking_default,
+            max_tokens=self.args.max_tokens,
+        )
+        return self.generate_protocol(request, on_text)
+
+    def generate_protocol(self, request, on_text) -> GenResult:
         from mlx_streaming.runtime.engine import GenerationRequest
 
         if self._engine is None:
@@ -223,9 +237,13 @@ class GeneralMLXBackend:
 
         result = self._engine.generate(
             GenerationRequest(
-                messages=messages,
-                max_tokens=self.args.max_tokens,
-                enable_thinking=self.args.thinking_default,
+                messages=request.messages,
+                images=list(request.images),
+                tools=[
+                    tool.as_openai_dict() for tool in request.tools
+                ] or None,
+                max_tokens=request.max_tokens,
+                enable_thinking=request.enable_thinking,
             ),
             on_delta,
         )

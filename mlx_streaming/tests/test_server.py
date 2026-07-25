@@ -25,6 +25,7 @@ def _valid_payload(**overrides):
     payload = {
         "model": MODEL_ID,
         "messages": [{"role": "user", "content": "Hello"}],
+        "enable_thinking": False,
     }
     payload.update(overrides)
     return payload
@@ -50,6 +51,11 @@ def test_validate_request_accepts_chatbox_metadata():
         messages=[{"role": "user", "content": "Hello"}],
         stream=True,
         max_tokens=12,
+        enable_thinking=False,
+        tools=(),
+        tool_choice="auto",
+        parallel_tool_calls=True,
+        images=[],
     )
 
 
@@ -58,8 +64,11 @@ def test_validate_request_accepts_chatbox_metadata():
     [
         ({"model": "other"}, "unknown model"),
         ({"messages": []}, "non-empty array"),
-        ({"messages": [{"role": "tool", "content": "x"}]}, "role"),
-        ({"messages": [{"role": "user", "content": []}]}, "string content"),
+        (
+            {"messages": [{"role": "tool", "content": "x"}]},
+            "tool_call_id",
+        ),
+        ({"messages": [{"role": "user", "content": []}]}, "non-empty array"),
         ({"max_tokens": 0}, "between 1 and 4096"),
         ({"max_tokens": 4097}, "between 1 and 4096"),
         ({"max_tokens": True}, "integer"),
@@ -74,12 +83,9 @@ def test_validate_request_rejects_invalid_input(change, message):
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("tools", []),
-        ("tool_choice", "auto"),
         ("functions", []),
         ("function_call", "auto"),
         ("response_format", {"type": "json_object"}),
-        ("parallel_tool_calls", False),
     ],
 )
 def test_validate_request_rejects_unsupported_top_level_fields(field, value):
@@ -90,9 +96,7 @@ def test_validate_request_rejects_unsupported_top_level_fields(field, value):
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("tool_calls", []),
         ("function_call", {"name": "lookup"}),
-        ("tool_call_id", "call-123"),
     ],
 )
 def test_validate_request_rejects_unsupported_message_fields(field, value):
@@ -105,6 +109,77 @@ def test_validate_request_rejects_two_token_limit_fields():
     with pytest.raises(RequestError, match="only one"):
         validate_request(
             _valid_payload(max_tokens=10, max_completion_tokens=11), MODEL_ID, 128
+        )
+
+
+def test_validate_request_accepts_tools_history_and_decodes_arguments():
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+            },
+        },
+    }
+    request = validate_request(
+        _valid_payload(
+            enable_thinking=True,
+            tools=[tool],
+            tool_choice={"type": "function", "function": {"name": "get_weather"}},
+            parallel_tool_calls=False,
+            messages=[
+                {"role": "user", "content": "Weather?"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "reasoning_content": "I should use the tool.",
+                    "tool_calls": [
+                        {
+                            "id": "call_0123456789abcdef01234567",
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": '{"city":"London"}',
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_0123456789abcdef01234567",
+                    "content": '{"temperature":18}',
+                },
+            ],
+        ),
+        MODEL_ID,
+        128,
+    )
+
+    assert request.enable_thinking is True
+    assert request.parallel_tool_calls is False
+    assert request.tools[0].name == "get_weather"
+    assert request.messages[1]["tool_calls"][0]["function"]["arguments"] == {
+        "city": "London"
+    }
+
+
+def test_validate_request_rejects_unknown_tool_result_id():
+    with pytest.raises(RequestError, match="known tool call"):
+        validate_request(
+            _valid_payload(
+                messages=[
+                    {
+                        "role": "tool",
+                        "tool_call_id": "call_unknown",
+                        "content": "result",
+                    }
+                ]
+            ),
+            MODEL_ID,
+            128,
         )
 
 
@@ -187,7 +262,7 @@ def _raw_post_headers(content_length=None):
 
 
 def test_request_body_limits_are_explicit_and_bounded():
-    assert 0 < server_mod.MAX_REQUEST_BODY_BYTES <= 1024 * 1024
+    assert server_mod.MAX_REQUEST_BODY_BYTES == 12 * 1024 * 1024
     assert 0 < server_mod.REQUEST_BODY_READ_TIMEOUT_SECONDS <= 30
 
 
@@ -267,6 +342,7 @@ def test_non_streaming_completion_omits_unavailable_usage():
     assert response["choices"][0]["message"] == {
         "role": "assistant",
         "content": "Hello back",
+        "reasoning_content": None,
     }
     assert response["choices"][0]["finish_reason"] == "stop"
     assert "usage" not in response
@@ -290,6 +366,122 @@ def test_streaming_completion_has_role_deltas_stop_and_done():
         chunk["choices"][0]["delta"].get("content", "") for chunk in chunks
     ) == "Hi"
     assert chunks[-1]["choices"][0]["finish_reason"] == "stop"
+
+
+class _ProtocolBackend:
+    def __init__(self, reply):
+        self.reply = reply
+        self.args = types.SimpleNamespace(max_tokens=77)
+        self.requests = []
+
+    def generate_protocol(self, request, on_text):
+        self.requests.append(request)
+        accumulated = ""
+        for character in self.reply:
+            accumulated += character
+            if on_text(accumulated, len(accumulated)):
+                return GenResult(
+                    accumulated,
+                    len(accumulated),
+                    1.0,
+                    stopped=True,
+                )
+        return GenResult(self.reply, len(self.reply), 1.0, stopped=False)
+
+
+def _weather_tool():
+    return {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+def _weather_xml():
+    return (
+        "<tool_call>\n<function=get_weather>\n<parameter=city>\n"
+        "London\n</parameter>\n</function>\n</tool_call>"
+    )
+
+
+def test_non_streaming_separates_reasoning_from_content():
+    backend = _ProtocolBackend("<think>Because.</think>Answer")
+    with _ServerContext(backend) as address:
+        status, _, raw = _request(
+            address,
+            "POST",
+            "/v1/chat/completions",
+            _valid_payload(enable_thinking=True),
+        )
+
+    message = json.loads(raw)["choices"][0]["message"]
+    assert status == 200
+    assert message == {
+        "role": "assistant",
+        "content": "Answer",
+        "reasoning_content": "Because.",
+    }
+    assert backend.requests[0].enable_thinking is True
+
+
+def test_non_streaming_returns_structured_tool_calls():
+    backend = _ProtocolBackend("<think>Use tool.</think>" + _weather_xml())
+    with _ServerContext(backend) as address:
+        status, _, raw = _request(
+            address,
+            "POST",
+            "/v1/chat/completions",
+            _valid_payload(
+                enable_thinking=True,
+                tools=[_weather_tool()],
+                tool_choice="required",
+            ),
+        )
+
+    choice = json.loads(raw)["choices"][0]
+    assert status == 200
+    assert choice["finish_reason"] == "tool_calls"
+    assert choice["message"]["content"] is None
+    assert choice["message"]["reasoning_content"] == "Use tool."
+    call = choice["message"]["tool_calls"][0]
+    assert call["type"] == "function"
+    assert call["function"]["name"] == "get_weather"
+    assert json.loads(call["function"]["arguments"]) == {"city": "London"}
+
+
+def test_streaming_orders_reasoning_content_and_tool_call_deltas():
+    backend = _ProtocolBackend("<think>Use tool.</think>" + _weather_xml())
+    with _ServerContext(backend) as address:
+        status, _, raw = _request(
+            address,
+            "POST",
+            "/v1/chat/completions",
+            _valid_payload(
+                stream=True,
+                enable_thinking=True,
+                tools=[_weather_tool()],
+            ),
+        )
+
+    records = [line[6:] for line in raw.decode().splitlines() if line.startswith("data: ")]
+    chunks = [json.loads(record) for record in records[:-1]]
+    deltas = [chunk["choices"][0]["delta"] for chunk in chunks]
+    reasoning_indexes = [
+        index for index, delta in enumerate(deltas) if "reasoning_content" in delta
+    ]
+    tool_indexes = [index for index, delta in enumerate(deltas) if "tool_calls" in delta]
+    assert status == 200
+    assert reasoning_indexes
+    assert tool_indexes
+    assert max(reasoning_indexes) < min(tool_indexes)
+    assert chunks[-1]["choices"][0]["finish_reason"] == "tool_calls"
 
 
 def test_invalid_request_uses_openai_error_shape():

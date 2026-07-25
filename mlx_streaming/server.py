@@ -11,22 +11,27 @@ from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable
 
+from mlx_streaming.protocol.images import normalise_messages
+from mlx_streaming.protocol.reasoning import ReasoningParser
+from mlx_streaming.protocol.tools import (
+    ToolCall,
+    ToolDefinition,
+    parse_tool_calls,
+    validate_tools,
+)
 from mlx_streaming.tui.backend import ChatBackend, GenResult
 
 
 LOG = logging.getLogger(__name__)
-MAX_REQUEST_BODY_BYTES = 1024 * 1024
+MAX_REQUEST_BODY_BYTES = 12 * 1024 * 1024
 REQUEST_BODY_READ_TIMEOUT_SECONDS = 10.0
-_ROLES = {"system", "user", "assistant"}
+_ROLES = {"system", "user", "assistant", "tool"}
 _UNSUPPORTED_REQUEST_FIELDS = (
-    "tools",
-    "tool_choice",
     "functions",
     "function_call",
     "response_format",
-    "parallel_tool_calls",
 )
-_UNSUPPORTED_MESSAGE_FIELDS = ("tool_calls", "function_call", "tool_call_id")
+_UNSUPPORTED_MESSAGE_FIELDS = ("function_call",)
 _INFERENCE_LOCK = threading.Lock()
 
 
@@ -45,6 +50,138 @@ class ChatRequest:
     messages: list[dict]
     stream: bool
     max_tokens: int
+    enable_thinking: bool
+    tools: tuple[ToolDefinition, ...]
+    tool_choice: str | dict | None
+    parallel_tool_calls: bool
+    images: list[object]
+
+
+def _clean_history(messages: list[object]) -> list[dict]:
+    clean = []
+    known_tool_calls = set()
+    for index, message in enumerate(messages):
+        if not isinstance(message, dict):
+            raise RequestError(f"messages[{index}] must be an object")
+        for field in _UNSUPPORTED_MESSAGE_FIELDS:
+            if field in message:
+                raise RequestError(f"messages[{index}].{field} is not supported")
+        role = message.get("role")
+        if role not in _ROLES:
+            raise RequestError(f"messages[{index}].role is not supported")
+        content = message.get("content")
+        if role == "tool":
+            tool_call_id = message.get("tool_call_id")
+            if not isinstance(tool_call_id, str) or not tool_call_id:
+                raise RequestError(f"messages[{index}].tool_call_id is required")
+            if tool_call_id not in known_tool_calls:
+                raise RequestError(
+                    f"messages[{index}].tool_call_id must reference a known tool call"
+                )
+            if not isinstance(content, str):
+                raise RequestError(f"messages[{index}].content must be a string")
+            clean.append(
+                {
+                    "role": role,
+                    "tool_call_id": tool_call_id,
+                    "content": content,
+                }
+            )
+            continue
+        if content is None and role == "assistant" and message.get("tool_calls"):
+            content = ""
+        if not isinstance(content, (str, list)):
+            raise RequestError(
+                f"messages[{index}].content must be text or a non-empty array"
+            )
+        copied = {"role": role, "content": content}
+        reasoning = message.get("reasoning_content")
+        if reasoning is not None:
+            if role != "assistant" or not isinstance(reasoning, str):
+                raise RequestError(
+                    f"messages[{index}].reasoning_content is invalid"
+                )
+            copied["reasoning_content"] = reasoning
+        calls = message.get("tool_calls")
+        if calls is not None:
+            if role != "assistant" or not isinstance(calls, list) or not calls:
+                raise RequestError(f"messages[{index}].tool_calls is invalid")
+            cleaned_calls = []
+            for call_index, call in enumerate(calls):
+                if not isinstance(call, dict):
+                    raise RequestError(
+                        f"messages[{index}].tool_calls[{call_index}] is invalid"
+                    )
+                function = call.get("function")
+                call_id = call.get("id")
+                name = function.get("name") if isinstance(function, dict) else None
+                arguments = (
+                    function.get("arguments") if isinstance(function, dict) else None
+                )
+                if (
+                    call.get("type") != "function"
+                    or not isinstance(call_id, str)
+                    or not call_id
+                    or not isinstance(name, str)
+                    or not isinstance(arguments, str)
+                ):
+                    raise RequestError(
+                        f"messages[{index}].tool_calls[{call_index}] is invalid"
+                    )
+                try:
+                    decoded_arguments = json.loads(arguments)
+                except json.JSONDecodeError as exc:
+                    raise RequestError(
+                        f"messages[{index}].tool_calls[{call_index}]."
+                        "function.arguments must be valid JSON"
+                    ) from exc
+                if not isinstance(decoded_arguments, dict):
+                    raise RequestError(
+                        f"messages[{index}].tool_calls[{call_index}]."
+                        "function.arguments must decode to an object"
+                    )
+                known_tool_calls.add(call_id)
+                cleaned_calls.append(
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "arguments": decoded_arguments,
+                        },
+                    }
+                )
+            copied["tool_calls"] = cleaned_calls
+        clean.append(copied)
+    return clean
+
+
+def _validate_tool_choice(
+    choice: object,
+    tools: tuple[ToolDefinition, ...],
+) -> str | dict | None:
+    if choice is None:
+        return None
+    if isinstance(choice, str):
+        if choice not in {"none", "auto", "required"}:
+            raise RequestError("tool_choice must be none, auto or required")
+        if choice == "required" and not tools:
+            raise RequestError("tool_choice required needs at least one tool")
+        return choice
+    if not isinstance(choice, dict):
+        raise RequestError("tool_choice must be a string or function object")
+    function = choice.get("function")
+    name = function.get("name") if isinstance(function, dict) else None
+    if (
+        choice.get("type") != "function"
+        or not isinstance(name, str)
+        or name not in {tool.name for tool in tools}
+    ):
+        raise RequestError("tool_choice names an unknown function")
+    return {
+        "type": "function",
+        "function": {"name": name},
+    }
 
 
 def validate_request(
@@ -60,23 +197,25 @@ def validate_request(
     messages = payload.get("messages")
     if not isinstance(messages, list) or not messages:
         raise RequestError("messages must be a non-empty array")
-    clean_messages = []
-    for index, message in enumerate(messages):
-        if not isinstance(message, dict):
-            raise RequestError(f"messages[{index}] must be an object")
-        for field in _UNSUPPORTED_MESSAGE_FIELDS:
-            if field in message:
-                raise RequestError(f"messages[{index}].{field} is not supported")
-        role = message.get("role")
-        if role not in _ROLES:
-            raise RequestError(f"messages[{index}].role is not supported")
-        content = message.get("content")
-        if not isinstance(content, str):
-            raise RequestError(f"messages[{index}].content must be string content")
-        clean_messages.append({"role": role, "content": content})
+    clean_messages = _clean_history(messages)
+    try:
+        normalised = normalise_messages(clean_messages)
+    except ValueError as exc:
+        raise RequestError(str(exc)) from exc
     stream = payload.get("stream", False)
     if not isinstance(stream, bool):
         raise RequestError("stream must be a boolean")
+    enable_thinking = payload.get("enable_thinking", True)
+    if not isinstance(enable_thinking, bool):
+        raise RequestError("enable_thinking must be a boolean")
+    try:
+        tools = validate_tools(payload.get("tools", []))
+    except ValueError as exc:
+        raise RequestError(str(exc)) from exc
+    tool_choice = _validate_tool_choice(payload.get("tool_choice", "auto"), tools)
+    parallel_tool_calls = payload.get("parallel_tool_calls", True)
+    if not isinstance(parallel_tool_calls, bool):
+        raise RequestError("parallel_tool_calls must be a boolean")
     token_fields = [
         field for field in ("max_tokens", "max_completion_tokens") if field in payload
     ]
@@ -87,7 +226,16 @@ def validate_request(
         raise RequestError("maximum token count must be an integer")
     if not 1 <= max_tokens <= 4096:
         raise RequestError("maximum token count must be between 1 and 4096")
-    return ChatRequest(clean_messages, stream, max_tokens)
+    return ChatRequest(
+        messages=normalised.messages,
+        stream=stream,
+        max_tokens=max_tokens,
+        enable_thinking=enable_thinking,
+        tools=tools,
+        tool_choice=tool_choice,
+        parallel_tool_calls=parallel_tool_calls,
+        images=normalised.images,
+    )
 
 
 def cumulative_delta(previous: str, current: str) -> str:
@@ -113,6 +261,40 @@ def _chunk(completion_id: str, model_id: str, delta: dict, finish_reason=None) -
         "model": model_id,
         "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
     }
+
+
+@dataclass(frozen=True)
+class _AssistantOutput:
+    reasoning_content: str | None
+    content: str | None
+    tool_calls: tuple[ToolCall, ...]
+
+
+def _parse_assistant_output(text: str, request: ChatRequest) -> _AssistantOutput:
+    parser = ReasoningParser(enable_thinking=request.enable_thinking)
+    first = parser.feed(text)
+    final = parser.finish()
+    reasoning = first.reasoning_content + final.reasoning_content
+    content = first.content + final.content
+    stripped = content.lstrip()
+    forced_or_required = (
+        request.tool_choice == "required"
+        or isinstance(request.tool_choice, dict)
+    )
+    if stripped.startswith("<tool_call>") or forced_or_required:
+        calls = parse_tool_calls(
+            content,
+            request.tools,
+            tool_choice=request.tool_choice,
+            parallel_tool_calls=request.parallel_tool_calls,
+        )
+    else:
+        calls = ()
+    return _AssistantOutput(
+        reasoning_content=reasoning or None,
+        content=None if calls else content,
+        tool_calls=calls,
+    )
 
 
 class VatesHTTPServer(ThreadingHTTPServer):
@@ -229,6 +411,17 @@ class VatesRequestHandler(BaseHTTPRequestHandler):
             if args is not None:
                 args.max_tokens = request.max_tokens
             try:
+                protocol_generate = getattr(
+                    self.app.backend,
+                    "generate_protocol",
+                    None,
+                )
+                if callable(protocol_generate):
+                    return protocol_generate(request, on_text)
+                if request.images or request.tools or request.enable_thinking:
+                    raise RuntimeError(
+                        "backend does not support the requested protocol capabilities"
+                    )
                 return self.app.backend.generate(request.messages, on_text)
             finally:
                 if args is not None:
@@ -237,11 +430,23 @@ class VatesRequestHandler(BaseHTTPRequestHandler):
     def _complete(self, request: ChatRequest):
         try:
             result = self._run(request, lambda _text, _tokens: False)
+            output = _parse_assistant_output(result.text, request)
         except Exception:
             LOG.exception("inference failed")
             self._json(500, _error("inference failed", "server_error"))
             return
         completion_id = f"chatcmpl-{uuid.uuid4().hex}"
+        message = {
+            "role": "assistant",
+            "content": output.content,
+            "reasoning_content": output.reasoning_content,
+        }
+        finish_reason = "stop"
+        if output.tool_calls:
+            message["tool_calls"] = [
+                call.as_openai_dict() for call in output.tool_calls
+            ]
+            finish_reason = "tool_calls"
         self._json(
             200,
             {
@@ -252,8 +457,8 @@ class VatesRequestHandler(BaseHTTPRequestHandler):
                 "choices": [
                     {
                         "index": 0,
-                        "message": {"role": "assistant", "content": result.text},
-                        "finish_reason": "stop",
+                        "message": message,
+                        "finish_reason": finish_reason,
                     }
                 ],
             },
@@ -284,19 +489,84 @@ class VatesRequestHandler(BaseHTTPRequestHandler):
         ):
             return
         previous = ""
+        raw = ""
+        parser = ReasoningParser(enable_thinking=request.enable_thinking)
+        reasoning_sent = ""
+        plain_stream = not request.enable_thinking and not request.tools
 
         def on_text(text: str, _tokens: int) -> bool:
-            nonlocal previous
+            nonlocal previous, raw, reasoning_sent
             delta = cumulative_delta(previous, text)
             previous = text
-            return bool(delta) and not self._write_sse(
-                _chunk(completion_id, self.app.model_id, {"content": delta})
-            )
+            raw += delta
+            if not delta:
+                return False
+            if plain_stream:
+                return not self._write_sse(
+                    _chunk(completion_id, self.app.model_id, {"content": delta})
+                )
+            parsed = parser.feed(delta)
+            if parsed.reasoning_content:
+                reasoning_sent += parsed.reasoning_content
+                if not self._write_sse(
+                    _chunk(
+                        completion_id,
+                        self.app.model_id,
+                        {"reasoning_content": parsed.reasoning_content},
+                    )
+                ):
+                    return True
+            return False
 
         try:
-            self._run(request, on_text)
+            result = self._run(request, on_text)
+            if not raw:
+                raw = result.text
+            output = _parse_assistant_output(raw, request)
+            if not plain_stream:
+                if output.reasoning_content:
+                    remaining = output.reasoning_content[len(reasoning_sent) :]
+                    if remaining and not self._write_sse(
+                        _chunk(
+                            completion_id,
+                            self.app.model_id,
+                            {"reasoning_content": remaining},
+                        )
+                    ):
+                        return
+                if output.tool_calls:
+                    for index, call in enumerate(output.tool_calls):
+                        if not self._write_sse(
+                            _chunk(
+                                completion_id,
+                                self.app.model_id,
+                                {
+                                    "tool_calls": [
+                                        {
+                                            "index": index,
+                                            **call.as_openai_dict(),
+                                        }
+                                    ]
+                                },
+                            )
+                        ):
+                            return
+                elif output.content and not self._write_sse(
+                    _chunk(
+                        completion_id,
+                        self.app.model_id,
+                        {"content": output.content},
+                    )
+                ):
+                    return
+            finish_reason = "tool_calls" if output.tool_calls else "stop"
             if self._write_sse(
-                _chunk(completion_id, self.app.model_id, {}, finish_reason="stop")
+                _chunk(
+                    completion_id,
+                    self.app.model_id,
+                    {},
+                    finish_reason=finish_reason,
+                )
             ):
                 self._write_sse("[DONE]")
         except Exception:
